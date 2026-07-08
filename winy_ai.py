@@ -73,6 +73,7 @@ HTML_TEMPLATE = '''
             -webkit-font-smoothing: antialiased;
             position: relative;
             overflow-x: hidden;
+            scroll-behavior: smooth;
         }
         .bg-shape { position: fixed; border-radius: 50%; filter: blur(100px); z-index: 0; pointer-events: none; }
         .shape-1 { width: 500px; height: 500px; background: #f0f0f0; top: -100px; left: -100px; }
@@ -168,18 +169,50 @@ HTML_TEMPLATE = '''
         .btn-icon { background: transparent; border: 1px solid var(--glass-border); color: var(--text); width: 36px; height: 36px; border-radius: 100px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
         .btn-icon:hover { border-color: var(--accent); background: rgba(0,0,0,0.05); }
         .btn-icon svg { width: 16px; height: 16px; stroke-width: 2; }
-        .unified-summary { font-size: 16px; line-height: 1.7; color: #333; margin-bottom: 40px; padding-bottom: 40px; border-bottom: 1px solid var(--glass-border); }
-        .accordion { margin-bottom: 40px; }
-        .accordion-item { border-bottom: 1px solid var(--glass-border); }
-        .accordion-header { display: flex; justify-content: space-between; align-items: center; padding: 24px 0; cursor: pointer; transition: color 0.2s; }
-        .accordion-header:hover { color: #000; }
-        .accordion-title { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 12px; }
-        .accordion-title svg { width: 18px; height: 18px; stroke-width: 1.5; color: var(--text-muted); }
-        .accordion-icon { width: 20px; height: 20px; transition: transform 0.3s ease; }
-        .accordion-item.active .accordion-icon { transform: rotate(90deg); }
-        .accordion-content { max-height: 0; overflow: hidden; transition: max-height 0.4s ease, padding 0.4s ease; }
-        .accordion-item.active .accordion-content { max-height: 1000px; padding-bottom: 24px; }
-        .accordion-text { font-size: 15px; line-height: 1.8; color: #555; white-space: pre-wrap; }
+        
+        /* HORIZONTAL GLASS BOXES FOR RESULTS */
+        .results-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+        .result-box {
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+            padding: 24px;
+            transition: transform 0.3s ease;
+        }
+        .result-box:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+        }
+        .result-box h3 {
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+        }
+        .result-box p {
+            font-size: 15px;
+            line-height: 1.6;
+            color: var(--text);
+        }
+        
+        .unified-summary {
+            font-size: 16px;
+            line-height: 1.7;
+            color: #333;
+            margin-bottom: 40px;
+            padding: 24px;
+            background: rgba(0,0,0,0.02);
+            border-radius: 16px;
+            border-left: 3px solid var(--accent);
+        }
+
         .cost-section { margin: 40px 0; }
         .cost-slider { display: flex; gap: 16px; overflow-x: auto; padding: 20px 0; scrollbar-width: none; }
         .cost-slider::-webkit-scrollbar { display: none; }
@@ -188,12 +221,76 @@ HTML_TEMPLATE = '''
         .cost-card-value { font-size: 24px; font-weight: 700; }
         .cost-card.total { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
         .cost-card.total .cost-card-label { color: #aaa; }
-        .followup-wrapper { margin-top: 40px; padding-top: 40px; border-top: 1px solid var(--glass-border); display: flex; gap: 12px; }
-        .followup-input { flex: 1; background: rgba(0,0,0,0.03); border: 1px solid var(--glass-border); color: var(--text); padding: 14px 16px; border-radius: 100px; font-size: 14px; outline: none; font-family: var(--font); }
+        
+        /* FOLLOWUP QUESTION BOX */
+        .followup-wrapper {
+            margin-top: 40px;
+            padding: 32px;
+            background: rgba(0,0,0,0.03);
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+        }
+        .followup-label {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-bottom: 16px;
+            display: block;
+        }
+        .followup-input {
+            flex: 1; background: rgba(0,0,0,0.03); border: 1px solid var(--glass-border);
+            color: var(--text); padding: 14px 16px; border-radius: 100px;
+            font-size: 14px; outline: none; font-family: var(--font);
+            width: 100%;
+            margin-bottom: 12px;
+        }
         .followup-input:focus { border-color: rgba(0,0,0,0.2); }
-        .btn-send { background: var(--accent); color: var(--accent-text); border: none; width: 44px; height: 44px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: transform 0.2s; }
-        .btn-send:hover { transform: scale(1.05); }
+        .btn-send {
+            background: var(--accent); color: var(--accent-text); border: none;
+            width: 100%; padding: 14px 24px; border-radius: 100px;
+            font-size: 14px; font-weight: 600;
+            cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
+            transition: transform 0.2s;
+        }
+        .btn-send:hover { transform: scale(1.02); }
         .btn-send svg { width: 18px; height: 18px; }
+        
+        .question-box {
+            background: #fff;
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            padding: 20px;
+            margin-bottom: 16px;
+            border-left: 3px solid var(--accent);
+        }
+        .question-box strong {
+            color: var(--text-muted);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            display: block;
+            margin-bottom: 8px;
+        }
+        .question-box p {
+            font-size: 15px;
+            line-height: 1.5;
+        }
+        
+        .answer-box {
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            padding: 20px;
+            margin-top: 16px;
+        }
+        .answer-box p {
+            font-size: 15px;
+            line-height: 1.7;
+            color: var(--text);
+        }
+
         .footer-limit { margin-top: 60px; padding-top: 24px; border-top: 1px solid var(--glass-border); text-align: center; font-size: 12px; color: var(--text-muted); }
 
         .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); z-index: 1000; align-items: center; justify-content: center; }
@@ -208,6 +305,7 @@ HTML_TEMPLATE = '''
         @media (max-width: 768px) {
             .hero h1 { font-size: 36px; } .container { padding: 100px 20px 40px; }
             .glass-card { padding: 24px; border-radius: 24px; } nav { width: 95%; padding: 12px 20px; }
+            .results-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -285,18 +383,26 @@ HTML_TEMPLATE = '''
                 </button>
             </div>
         </div>
+        
         <div class="unified-summary" id="unifiedSummary"></div>
-        <div class="accordion" id="accordionContainer"></div>
+        
+        <div class="results-grid" id="resultsGrid"></div>
+        
         <div class="cost-section" id="costSection">
             <div class="option-label" style="margin-bottom:16px;">Capital Requirements</div>
             <div class="cost-slider" id="costSlider"></div>
         </div>
-        <div class="followup-wrapper">
-            <input type="text" class="followup-input" id="followupInput" placeholder="Ask the swarm a follow-up question...">
+
+        <div class="followup-wrapper" id="followupSection">
+            <span class="followup-label">Follow-up Question</span>
+            <input type="text" class="followup-input" id="followupInput" placeholder="Ask the swarm anything about this strategy...">
             <button class="btn-send" onclick="askFollowup()">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                Ask Swarm
             </button>
         </div>
+        
+        <div id="qaContainer"></div>
     </div>
 
     <div class="footer-limit" id="footerLimit">
@@ -316,7 +422,6 @@ HTML_TEMPLATE = '''
 </div>
 
 <script>
-    // BULLETPROOF VARIABLE PASSING
     var isPro = {{ session.get('is_pro', False) | tojson }};
     var generationsUsed = {{ session.get('generations_used', 0) | tojson }};
     var followupsUsed = {{ session.get('followups_used', 0) | tojson }};
@@ -357,28 +462,22 @@ HTML_TEMPLATE = '''
         return html;
     }
 
-    function toggleAccordion(element) {
-        var item = element.parentElement;
-        var isActive = item.classList.contains('active');
-        var allItems = document.querySelectorAll('.accordion-item');
-        for(var i=0; i<allItems.length; i++) allItems[i].classList.remove('active');
-        if (!isActive) item.classList.add('active');
-    }
-
     function renderResults(data) {
-        document.getElementById('unifiedSummary').innerHTML = highlightText(data.summary);
+        document.getElementById('unifiedSummary').innerHTML = '<p>' + highlightText(data.summary) + '</p>';
+        
         var sections = [
             { id: 'market', title: 'Market Analysis' },
             { id: 'strategy', title: 'Operational Strategy' },
             { id: 'financials', title: 'Financial Projections' },
             { id: 'gtm', title: 'Go-to-Market Plan' }
         ];
-        var accHtml = '';
+        
+        var gridHtml = '';
         for(var i=0; i<sections.length; i++) {
             var sec = sections[i];
-            accHtml += '<div class="accordion-item"><div class="accordion-header" onclick="toggleAccordion(this)"><div class="accordion-title">' + sec.title + '</div><svg class="accordion-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></div><div class="accordion-content"><div class="accordion-text">' + highlightText(data[sec.id]) + '</div></div></div>';
+            gridHtml += '<div class="result-box"><h3>' + sec.title + '</h3><p>' + highlightText(data[sec.id]) + '</p></div>';
         }
-        document.getElementById('accordionContainer').innerHTML = accHtml;
+        document.getElementById('resultsGrid').innerHTML = gridHtml;
 
         var costs = data.costs || {};
         var costHtml = '';
@@ -411,6 +510,7 @@ HTML_TEMPLATE = '''
         document.getElementById('inputWrapper').style.display = 'none';
         document.getElementById('resultsArea').classList.remove('active');
         document.getElementById('swarmLoader').classList.add('active');
+        document.getElementById('qaContainer').innerHTML = '';
 
         fetch('/generate', {
             method: 'POST',
@@ -424,6 +524,7 @@ HTML_TEMPLATE = '''
             document.getElementById('resultsArea').classList.add('active');
             if (!isPro) { generationsUsed++; updateUI(); }
             renderResults(data);
+            window.scrollTo({ top: document.getElementById('resultsArea').offsetTop - 100, behavior: 'smooth' });
         })
         .catch(function(e) {
             document.getElementById('swarmLoader').classList.remove('active');
@@ -438,8 +539,25 @@ HTML_TEMPLATE = '''
         if (!isPro && followupsUsed >= 1) {
             return showModal('Pro Feature', 'Free users get 1 follow-up question.', 'Upgrade', true);
         }
+        
         var btn = document.querySelector('.btn-send');
-        btn.innerHTML = '...';
+        var originalContent = btn.innerHTML;
+        btn.innerHTML = 'Processing...';
+        btn.disabled = true;
+        
+        var qaContainer = document.getElementById('qaContainer');
+        var questionBox = document.createElement('div');
+        questionBox.className = 'question-box';
+        questionBox.innerHTML = '<strong>Your Question</strong><p>' + q + '</p>';
+        qaContainer.appendChild(questionBox);
+        
+        var answerBox = document.createElement('div');
+        answerBox.className = 'answer-box';
+        answerBox.innerHTML = '<p style="color:#666;">Thinking...</p>';
+        qaContainer.appendChild(answerBox);
+        
+        window.scrollTo({ top: answerBox.offsetTop - 100, behavior: 'smooth' });
+
         fetch('/followup', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -447,15 +565,16 @@ HTML_TEMPLATE = '''
         })
         .then(function(res) { return res.json(); })
         .then(function(data) {
-            var summaryEl = document.getElementById('unifiedSummary');
-            summaryEl.innerHTML += '<br><br><strong style="color:#000;">Q: ' + q + '</strong><br><br>' + highlightText(data.answer);
+            answerBox.innerHTML = '<p>' + highlightText(data.answer) + '</p>';
             document.getElementById('followupInput').value = '';
             if (!isPro) followupsUsed++;
-            btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>';
+            btn.innerHTML = originalContent;
+            btn.disabled = false;
         })
         .catch(function(e) {
-            showModal('Error', 'Follow-up failed.');
-            btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>';
+            answerBox.innerHTML = '<p style="color:red;">Error: Failed to get answer</p>';
+            btn.innerHTML = originalContent;
+            btn.disabled = false;
         });
     }
 
@@ -479,26 +598,33 @@ HTML_TEMPLATE = '''
                     fetch('/api/verify-payment', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify(response)
+                        body: JSON.stringify({
+                            razorpay_payment_id: response.razorpay_payment_id,
+                            razorpay_order_id: response.razorpay_order_id,
+                            razorpay_signature: response.razorpay_signature
+                        })
                     }).then(function(res) { return res.json(); })
                     .then(function(data) {
                         if(data.status === 'success') {
                             isPro = true; generationsUsed = 0; followupsUsed = 0;
                             updateUI();
                             showModal('Payment Successful!', 'Welcome to Winy AI Pro!');
-                        } else { showModal('Payment Failed', 'Verification failed.'); }
-                    });
+                        } else { showModal('Payment Failed', 'Verification failed. Please contact support.'); }
+                    })
+                    .catch(function(err) { showModal('Error', 'Verification error: ' + err.message); });
                 },
                 prefill: { name: '', email: '', contact: '' },
                 theme: { color: '#000000' }
             };
             var rzp = new Razorpay(options);
+            rzp.on('payment.failed', function(response) {
+                showModal('Payment Failed', response.error.description);
+            });
             rzp.open();
         })
         .catch(function(e) { showModal('Error', 'Failed to start payment.'); });
     }
 
-    // Initialize
     updateUI();
 </script>
 </body>
@@ -526,7 +652,22 @@ def generate():
 
     word_map = {'short': '200 words', 'medium': '350 words', 'long': '500 words'}
     limit = word_map.get(length, '350 words')
-    sys = f"You are a business consultant. Industry: {industry}. Tone: {tone}. Analyze: {prompt}. Format: SUMMARY:, MARKET: ({limit}), STRATEGY: ({limit}), FINANCIALS: ({limit}), GTM: ({limit}), COSTS: (Product Dev: num, Marketing: num, Operations: num, Legal: num, Contingency: num)"
+    sys = f"""Business consultant for {industry}. Tone: {tone}.
+    Analyze: {prompt}
+    
+    Provide EXACTLY in this format:
+    SUMMARY: [2-3 sentences]
+    MARKET: [{limit}]
+    STRATEGY: [{limit}]
+    FINANCIALS: [{limit}]
+    GTM: [{limit}]
+    COSTS:
+    Product Dev: [number]
+    Marketing: [number]
+    Operations: [number]
+    Legal: [number]
+    Contingency: [number]
+    """
     raw = call_llm(sys, prompt)
     
     sections = {'summary': '', 'market': '', 'strategy': '', 'financials': '', 'gtm': '', 'costs': {}}
@@ -560,7 +701,7 @@ def followup():
     if not session.get('is_pro') and session.get('followups_used', 0) >= 1:
         return jsonify({"error": "Limit reached"}), 403
     data = request.json
-    sys = f"Context: {data['industry']} business based on '{data['context']}'. Answer concisely: {data['question']}"
+    sys = f"Context: {data['industry']} business idea: '{data['context']}'. Answer concisely in 100-150 words: {data['question']}"
     ans = call_llm(sys, data['question'])
     if not session.get('is_pro'): session['followups_used'] = session.get('followups_used', 0) + 1
     return jsonify({"answer": ans})
@@ -576,12 +717,26 @@ def create_order():
 def verify_payment():
     try:
         data = request.json
-        sig = hmac.new(RAZORPAY_KEY_SECRET.encode(), f"{data.get('razorpay_order_id')}|{data.get('razorpay_payment_id')}".encode(), hashlib.sha256).hexdigest()
-        if sig == data.get('razorpay_signature'):
-            session['is_pro'] = True; session['generations_used'] = 0; session['followups_used'] = 0
+        order_id = data.get('razorpay_order_id', '')
+        payment_id = data.get('razorpay_payment_id', '')
+        signature = data.get('razorpay_signature', '')
+        
+        message = order_id + "|" + payment_id
+        expected_signature = hmac.new(
+            RAZORPAY_KEY_SECRET.encode(),
+            message.encode(),
+            hashlib.sha256
+        ).hexdigest()
+        
+        if expected_signature == signature:
+            session['is_pro'] = True
+            session['generations_used'] = 0
+            session['followups_used'] = 0
             return jsonify({"status": "success"})
-        return jsonify({"status": "failure"}), 400
-    except Exception as e: return jsonify({"error": str(e)}), 500
+        
+        return jsonify({"status": "failure", "message": "Signature mismatch"}), 400
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=False)
