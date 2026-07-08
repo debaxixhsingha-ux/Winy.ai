@@ -39,7 +39,7 @@ def call_llm(system_prompt, user_prompt, temperature=0.7):
                 {"role": "user", "content": user_prompt}
             ],
             "temperature": temperature,
-            "max_tokens": 2000
+            "max_tokens": 2500
         }, timeout=90)
         result = response.json()
         if 'choices' in result and len(result['choices']) > 0:
@@ -105,17 +105,12 @@ HTML_TEMPLATE = '''
             background: #000;
             border-color: #333;
         }
-        nav.pro-nav .logo, nav.pro-nav .user-info, nav.pro-nav .btn-pro, nav.pro-nav .btn-logout {
-            color: #fff;
-        }
-        nav.pro-nav .btn-pro {
-            background: #fff;
-            color: #000;
-        }
-        nav.pro-nav .btn-logout {
-            border-color: rgba(255,255,255,0.3);
-            color: rgba(255,255,255,0.7);
-        }
+        nav.pro-nav .nav-left, nav.pro-nav .nav-right { color: #fff; }
+        nav.pro-nav .btn-pro { background: #fff; color: #000; }
+        nav.pro-nav .btn-logout { border-color: rgba(255,255,255,0.3); color: rgba(255,255,255,0.7); }
+
+        .nav-left { display: flex; align-items: center; gap: 12px; }
+        .nav-right { display: flex; align-items: center; gap: 12px; }
 
         .logo { font-size: 16px; font-weight: 700; letter-spacing: -0.5px; display: flex; align-items: center; gap: 8px; }
         .logo svg { width: 18px; height: 18px; }
@@ -135,9 +130,7 @@ HTML_TEMPLATE = '''
         }
         .btn-login:hover { opacity: 0.8; }
 
-        .user-info {
-            display: flex; align-items: center; gap: 12px;
-        }
+        .user-info { display: flex; align-items: center; gap: 12px; }
         .user-avatar {
             width: 32px; height: 32px; border-radius: 50%;
             background: var(--accent); color: var(--accent-text);
@@ -215,136 +208,6 @@ HTML_TEMPLATE = '''
         .swarm-text { margin-top: 40px; font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: var(--text-muted); animation: fade-text 2s infinite; }
         @keyframes fade-text { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
 
-        .results-area { display: none; animation: fadeIn 0.6s ease; }
-        .results-area.active { display: block; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .results-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 32px; padding-bottom: 24px; border-bottom: 1px solid var(--glass-border); }
-        .results-header h2 { font-size: 18px; font-weight: 600; }
-        .btn-icon { background: transparent; border: 1px solid var(--glass-border); color: var(--text); width: 36px; height: 36px; border-radius: 100px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
-        .btn-icon:hover { border-color: var(--accent); background: rgba(0,0,0,0.05); }
-        .btn-icon svg { width: 16px; height: 16px; stroke-width: 2; }
-        
-        .results-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 20px;
-            margin-bottom: 40px;
-        }
-        .result-box {
-            background: var(--glass-bg);
-            backdrop-filter: blur(20px);
-            border: 1px solid var(--glass-border);
-            border-radius: 20px;
-            padding: 24px;
-            transition: transform 0.3s ease;
-        }
-        .result-box:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 10px 30px rgba(0,0,0,0.08);
-        }
-        .result-box h3 {
-            font-size: 14px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            color: var(--text-muted);
-            margin-bottom: 12px;
-        }
-        .result-box p {
-            font-size: 15px;
-            line-height: 1.6;
-            color: var(--text);
-        }
-        
-        .unified-summary {
-            font-size: 16px;
-            line-height: 1.7;
-            color: #333;
-            margin-bottom: 40px;
-            padding: 24px;
-            background: rgba(0,0,0,0.02);
-            border-radius: 16px;
-            border-left: 3px solid var(--accent);
-        }
-
-        .cost-section { margin: 40px 0; }
-        .cost-slider { display: flex; gap: 16px; overflow-x: auto; padding: 20px 0; scrollbar-width: none; }
-        .cost-slider::-webkit-scrollbar { display: none; }
-        .cost-card { flex: 0 0 auto; min-width: 180px; background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: 16px; padding: 20px; }
-        .cost-card-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
-        .cost-card-value { font-size: 24px; font-weight: 700; }
-        .cost-card.total { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
-        .cost-card.total .cost-card-label { color: #aaa; }
-        
-        .followup-wrapper {
-            margin-top: 40px;
-            padding: 32px;
-            background: rgba(0,0,0,0.03);
-            border: 1px solid var(--glass-border);
-            border-radius: 20px;
-        }
-        .followup-label {
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            color: var(--text-muted);
-            margin-bottom: 16px;
-            display: block;
-        }
-        .followup-input {
-            flex: 1; background: rgba(0,0,0,0.03); border: 1px solid var(--glass-border);
-            color: var(--text); padding: 14px 16px; border-radius: 100px;
-            font-size: 14px; outline: none; font-family: var(--font);
-            width: 100%;
-            margin-bottom: 12px;
-        }
-        .followup-input:focus { border-color: rgba(0,0,0,0.2); }
-        .followup-input:disabled { opacity: 0.5; cursor: not-allowed; }
-        .btn-send {
-            background: var(--accent); color: var(--accent-text); border: none;
-            width: 100%; padding: 14px 24px; border-radius: 100px;
-            font-size: 14px; font-weight: 600;
-            cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
-            transition: transform 0.2s;
-        }
-        .btn-send:hover { transform: scale(1.02); }
-        .btn-send:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-        .btn-send svg { width: 18px; height: 18px; }
-        
-        .question-box {
-            background: #fff;
-            border: 1px solid var(--glass-border);
-            border-radius: 16px;
-            padding: 20px;
-            margin-bottom: 16px;
-            border-left: 3px solid var(--accent);
-        }
-        .question-box strong {
-            color: var(--text-muted);
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            display: block;
-            margin-bottom: 8px;
-        }
-        .question-box p {
-            font-size: 15px;
-            line-height: 1.5;
-        }
-        
-        .answer-box {
-            background: var(--glass-bg);
-            backdrop-filter: blur(20px);
-            border: 1px solid var(--glass-border);
-            border-radius: 16px;
-            padding: 20px;
-            margin-top: 16px;
-        }
-        .answer-box p {
-            font-size: 15px;
-            line-height: 1.7;
-            color: var(--text);
-        }
-
         .footer-limit { margin-top: 60px; padding-top: 24px; border-top: 1px solid var(--glass-border); text-align: center; font-size: 12px; color: var(--text-muted); }
 
         .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); z-index: 1000; align-items: center; justify-content: center; }
@@ -356,7 +219,7 @@ HTML_TEMPLATE = '''
         .modal-btn:hover { opacity: 0.8; }
         .modal-btn.secondary { background: transparent; color: var(--text); border: 1px solid var(--glass-border); }
 
-        /* Login Modal Styles */
+        /* Login Modal */
         .login-modal { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,0.9); backdrop-filter: blur(20px); z-index: 2000; align-items: center; justify-content: center; }
         .login-modal.active { display: flex; }
         .login-card {
@@ -368,131 +231,62 @@ HTML_TEMPLATE = '''
             width: 90%;
             box-shadow: 0 30px 60px rgba(0,0,0,0.1);
         }
-        .login-card h2 {
-            font-size: 28px;
-            margin-bottom: 8px;
-            text-align: center;
-        }
-        .login-card .subtitle {
-            color: var(--text-muted);
-            text-align: center;
-            margin-bottom: 32px;
-            font-size: 14px;
-        }
-        .login-tabs {
-            display: flex;
-            gap: 8px;
-            margin-bottom: 24px;
-            background: rgba(0,0,0,0.03);
-            padding: 4px;
-            border-radius: 100px;
-        }
-        .login-tab {
-            flex: 1;
-            padding: 10px;
-            border: none;
-            background: transparent;
-            border-radius: 100px;
-            font-size: 13px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s;
-            color: var(--text-muted);
-        }
-        .login-tab.active {
-            background: var(--accent);
-            color: var(--accent-text);
-        }
-        .login-input {
-            width: 100%;
-            background: rgba(0,0,0,0.03);
-            border: 1px solid var(--glass-border);
-            border-radius: 12px;
-            padding: 14px 16px;
-            font-size: 14px;
-            margin-bottom: 12px;
-            outline: none;
-            font-family: var(--font);
-        }
-        .login-input:focus {
-            border-color: rgba(0,0,0,0.2);
-        }
-        .login-btn {
-            width: 100%;
-            background: var(--accent);
-            color: var(--accent-text);
-            border: none;
-            padding: 14px;
-            border-radius: 100px;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            margin-top: 8px;
-            transition: opacity 0.2s;
-        }
+        .login-card h2 { font-size: 28px; margin-bottom: 8px; text-align: center; }
+        .login-card .subtitle { color: var(--text-muted); text-align: center; margin-bottom: 32px; font-size: 14px; }
+        .login-tabs { display: flex; gap: 8px; margin-bottom: 24px; background: rgba(0,0,0,0.03); padding: 4px; border-radius: 100px; }
+        .login-tab { flex: 1; padding: 10px; border: none; background: transparent; border-radius: 100px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.3s; color: var(--text-muted); }
+        .login-tab.active { background: var(--accent); color: var(--accent-text); }
+        .login-input { width: 100%; background: rgba(0,0,0,0.03); border: 1px solid var(--glass-border); border-radius: 12px; padding: 14px 16px; font-size: 14px; margin-bottom: 12px; outline: none; font-family: var(--font); }
+        .login-input:focus { border-color: rgba(0,0,0,0.2); }
+        .login-btn { width: 100%; background: var(--accent); color: var(--accent-text); border: none; padding: 14px; border-radius: 100px; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 8px; transition: opacity 0.2s; }
         .login-btn:hover { opacity: 0.8; }
-        .login-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .divider {
-            display: flex;
-            align-items: center;
-            margin: 24px 0;
-            color: var(--text-muted);
-            font-size: 12px;
-        }
-        .divider::before, .divider::after {
-            content: '';
-            flex: 1;
-            border-bottom: 1px solid var(--glass-border);
-        }
-        .divider::before { margin-right: 12px; }
-        .divider::after { margin-left: 12px; }
-        .google-btn {
-            width: 100%;
-            background: #fff;
-            border: 1px solid var(--glass-border);
-            padding: 12px;
-            border-radius: 100px;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 12px;
-            transition: all 0.3s;
-        }
-        .google-btn:hover {
-            background: rgba(0,0,0,0.02);
-            border-color: rgba(0,0,0,0.2);
-        }
+        .divider { display: flex; align-items: center; margin: 24px 0; color: var(--text-muted); font-size: 12px; }
+        .divider::before, .divider::after { content: ''; flex: 1; border-bottom: 1px solid var(--glass-border); }
+        .divider::before { margin-right: 12px; } .divider::after { margin-left: 12px; }
+        .google-btn { width: 100%; background: #fff; border: 1px solid var(--glass-border); padding: 12px; border-radius: 100px; font-size: 14px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 12px; transition: all 0.3s; }
+        .google-btn:hover { background: rgba(0,0,0,0.02); border-color: rgba(0,0,0,0.2); }
         .google-btn svg { width: 20px; height: 20px; }
-        .login-error {
-            background: #fee;
-            border: 1px solid #fcc;
-            color: #c00;
-            padding: 12px;
-            border-radius: 12px;
-            font-size: 13px;
-            margin-bottom: 16px;
-            display: none;
-        }
+        .login-error { background: #fee; border: 1px solid #fcc; color: #c00; padding: 12px; border-radius: 12px; font-size: 13px; margin-bottom: 16px; display: none; }
         .login-error.active { display: block; }
 
-        /* Results Overlay */
+        /* Results Overlay - Smaller with blur background */
         .results-overlay {
             display: none;
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(255,255,255,0.95);
-            backdrop-filter: blur(20px);
             z-index: 1500;
-            overflow-y: auto;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
         }
-        .results-overlay.active { display: block; }
+        .results-overlay.active { display: flex; }
+        
+        .overlay-backdrop {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.3);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        }
+        
+        .overlay-container {
+            position: relative;
+            background: #fff;
+            border-radius: 32px;
+            width: 100%;
+            max-width: 700px;
+            max-height: 85vh;
+            overflow-y: auto;
+            box-shadow: 0 30px 60px rgba(0,0,0,0.2);
+            z-index: 10;
+        }
+        .overlay-container::-webkit-scrollbar { width: 6px; }
+        .overlay-container::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.2); border-radius: 3px; }
+        
         .overlay-header {
             position: sticky;
             top: 0;
-            background: rgba(255,255,255,0.9);
+            background: rgba(255,255,255,0.95);
             backdrop-filter: blur(20px);
             padding: 20px 24px;
             display: flex;
@@ -500,108 +294,194 @@ HTML_TEMPLATE = '''
             align-items: center;
             border-bottom: 1px solid var(--glass-border);
             z-index: 10;
+            border-radius: 32px 32px 0 0;
         }
-        .overlay-header h2 {
-            font-size: 20px;
-            font-weight: 700;
-        }
+        .overlay-header h2 { font-size: 18px; font-weight: 700; }
         .close-overlay {
             background: var(--accent);
             color: var(--accent-text);
             border: none;
-            width: 40px; height: 40px;
+            width: 36px; height: 36px;
             border-radius: 50%;
             cursor: pointer;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 20px;
+            font-size: 18px;
             transition: transform 0.2s;
         }
         .close-overlay:hover { transform: scale(1.1); }
         
-        .overlay-content {
-            max-width: 900px;
-            margin: 0 auto;
-            padding: 40px 24px;
-        }
+        .overlay-content { padding: 24px; }
         
         .overlay-summary {
-            font-size: 18px;
+            font-size: 16px;
             line-height: 1.7;
             color: #333;
-            margin-bottom: 40px;
-            padding: 32px;
+            margin-bottom: 24px;
+            padding: 20px;
             background: rgba(0,0,0,0.02);
-            border-radius: 24px;
-            border-left: 4px solid var(--accent);
+            border-radius: 16px;
+            border-left: 3px solid var(--accent);
         }
         
         .overlay-sections {
             display: flex;
-            gap: 20px;
+            gap: 16px;
             overflow-x: auto;
             scroll-snap-type: x mandatory;
-            padding: 20px 0;
+            padding: 16px 0;
             scrollbar-width: none;
         }
         .overlay-sections::-webkit-scrollbar { display: none; }
         
         .overlay-section-card {
             flex: 0 0 85%;
-            max-width: 400px;
+            max-width: 320px;
             background: var(--glass-bg);
-            backdrop-filter: blur(20px);
             border: 1px solid var(--glass-border);
-            border-radius: 24px;
-            padding: 32px;
+            border-radius: 20px;
+            padding: 24px;
             scroll-snap-align: center;
-            transition: transform 0.3s ease;
-        }
-        .overlay-section-card:hover {
-            transform: translateY(-4px);
         }
         .overlay-section-card h3 {
-            font-size: 16px;
+            font-size: 12px;
             text-transform: uppercase;
             letter-spacing: 1px;
             color: var(--text-muted);
-            margin-bottom: 16px;
+            margin-bottom: 12px;
         }
         .overlay-section-card p {
-            font-size: 15px;
-            line-height: 1.7;
-            color: var(--text);
-        }
-        
-        .overlay-costs {
-            margin-top: 40px;
-            padding: 32px;
-            background: rgba(0,0,0,0.02);
-            border-radius: 24px;
-        }
-        .overlay-costs h3 {
             font-size: 14px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            color: var(--text-muted);
-            margin-bottom: 20px;
+            line-height: 1.6;
+            color: var(--text);
         }
         
         .swipe-hint {
             text-align: center;
             color: var(--text-muted);
-            font-size: 12px;
-            margin-top: 20px;
+            font-size: 11px;
+            margin: 16px 0;
             opacity: 0.7;
         }
+        
+        .overlay-costs {
+            margin-top: 24px;
+            padding: 20px;
+            background: rgba(0,0,0,0.02);
+            border-radius: 16px;
+        }
+        .overlay-costs h3 {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-bottom: 16px;
+        }
+        .overlay-cost-slider { display: flex; gap: 12px; overflow-x: auto; padding: 8px 0; scrollbar-width: none; }
+        .overlay-cost-slider::-webkit-scrollbar { display: none; }
+        .cost-card { flex: 0 0 auto; min-width: 140px; background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: 12px; padding: 16px; }
+        .cost-card-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+        .cost-card-value { font-size: 20px; font-weight: 700; }
+        .cost-card.total { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+        .cost-card.total .cost-card-label { color: #aaa; }
+        
+        /* Follow-up in overlay */
+        .overlay-followup {
+            margin-top: 24px;
+            padding: 20px;
+            background: rgba(0,0,0,0.02);
+            border-radius: 16px;
+        }
+        .overlay-followup-label {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+            display: block;
+        }
+        .overlay-followup-input {
+            width: 100%;
+            background: rgba(0,0,0,0.03);
+            border: 1px solid var(--glass-border);
+            color: var(--text);
+            padding: 12px 16px;
+            border-radius: 100px;
+            font-size: 13px;
+            outline: none;
+            font-family: var(--font);
+            margin-bottom: 10px;
+        }
+        .overlay-followup-input:focus { border-color: rgba(0,0,0,0.2); }
+        .overlay-btn-send {
+            background: var(--accent);
+            color: var(--accent-text);
+            border: none;
+            width: 100%;
+            padding: 12px;
+            border-radius: 100px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        .overlay-btn-send:disabled { opacity: 0.5; cursor: not-allowed; }
+        .overlay-btn-send svg { width: 16px; height: 16px; }
+        
+        .qa-container { margin-top: 16px; }
+        .question-box {
+            background: #fff;
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 12px;
+            border-left: 3px solid var(--accent);
+        }
+        .question-box strong {
+            color: var(--text-muted);
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            display: block;
+            margin-bottom: 6px;
+        }
+        .question-box p { font-size: 14px; line-height: 1.5; }
+        .answer-box {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            padding: 16px;
+            margin-top: 12px;
+        }
+        .answer-box p { font-size: 14px; line-height: 1.6; color: var(--text); }
+
+        /* Colorful highlight boxes */
+        .hl-box {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 6px;
+            font-weight: 700;
+            font-size: 0.95em;
+        }
+        .hl-market { background: #dbeafe; color: #1e40af; }
+        .hl-revenue { background: #dcfce7; color: #166534; }
+        .hl-growth { background: #fef3c7; color: #92400e; }
+        .hl-strategy { background: #f3e8ff; color: #6b21a8; }
+        .hl-roi { background: #fce7f3; color: #9d174d; }
+        .hl-cost { background: #fee2e2; color: #991b1b; }
+        .hl-customers { background: #e0f2fe; color: #075985; }
 
         @media (max-width: 768px) {
             .hero h1 { font-size: 36px; } .container { padding: 100px 20px 40px; }
             .glass-card { padding: 24px; border-radius: 24px; } nav { width: 95%; padding: 12px 20px; }
-            .results-grid { grid-template-columns: 1fr; }
             .login-card { padding: 32px; }
             .overlay-section-card { flex: 0 0 90%; }
+            .overlay-container { max-height: 90vh; border-radius: 24px; }
+            .overlay-header { border-radius: 24px 24px 0 0; }
         }
     </style>
 </head>
@@ -609,13 +489,13 @@ HTML_TEMPLATE = '''
 <div class="bg-shape shape-1"></div><div class="bg-shape shape-2"></div>
 
 <nav id="mainNav">
-    <div id="navLeft">
+    <div class="nav-left" id="navLeft">
         <div class="logo">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
             Winy AI
         </div>
     </div>
-    <div id="navButtons">
+    <div class="nav-right" id="navRight">
         <button class="btn-login" onclick="showLoginModal()">Login / Sign Up</button>
     </div>
 </nav>
@@ -671,22 +551,32 @@ HTML_TEMPLATE = '''
         <div class="swarm-text">Swarm Processing</div>
     </div>
 
-    <div class="footer-limit" id="footerLimit">
-        Please login to access features.
-    </div>
+    <div class="footer-limit" id="footerLimit">Please login to access features.</div>
 </div>
 
 <!-- Results Overlay -->
 <div class="results-overlay" id="resultsOverlay">
-    <div class="overlay-header">
-        <h2>Strategic Output</h2>
-        <button class="close-overlay" onclick="closeResultsOverlay()">✕</button>
-    </div>
-    <div class="overlay-content">
-        <div class="overlay-summary" id="overlaySummary"></div>
-        <div class="overlay-sections" id="overlaySections"></div>
-        <div class="swipe-hint">← Swipe to explore sections →</div>
-        <div class="overlay-costs" id="overlayCosts"></div>
+    <div class="overlay-backdrop" onclick="closeResultsOverlay()"></div>
+    <div class="overlay-container">
+        <div class="overlay-header">
+            <h2>Strategic Output</h2>
+            <button class="close-overlay" onclick="closeResultsOverlay()">✕</button>
+        </div>
+        <div class="overlay-content">
+            <div class="overlay-summary" id="overlaySummary"></div>
+            <div class="overlay-sections" id="overlaySections"></div>
+            <div class="swipe-hint">← Swipe to explore sections →</div>
+            <div class="overlay-costs" id="overlayCosts"></div>
+            <div class="overlay-followup">
+                <span class="overlay-followup-label">Follow-up Question</span>
+                <input type="text" class="overlay-followup-input" id="overlayFollowupInput" placeholder="Ask the swarm anything...">
+                <button class="overlay-btn-send" id="overlayBtnSend" onclick="askFollowupOverlay()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                    Ask Swarm
+                </button>
+                <div class="qa-container" id="overlayQaContainer"></div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -695,28 +585,22 @@ HTML_TEMPLATE = '''
     <div class="login-card">
         <h2>Welcome to Winy AI</h2>
         <p class="subtitle">Login to deploy the swarm</p>
-        
         <div class="login-tabs">
             <button class="login-tab active" onclick="switchTab('login')">Login</button>
             <button class="login-tab" onclick="switchTab('signup')">Sign Up</button>
         </div>
-        
         <div class="login-error" id="loginError"></div>
-        
         <div id="loginForm">
             <input type="email" class="login-input" id="loginEmail" placeholder="Email">
             <input type="password" class="login-input" id="loginPassword" placeholder="Password">
             <button class="login-btn" onclick="loginWithEmail()">Login</button>
         </div>
-        
         <div id="signupForm" style="display:none;">
             <input type="email" class="login-input" id="signupEmail" placeholder="Email">
             <input type="password" class="login-input" id="signupPassword" placeholder="Password (min 6 characters)">
             <button class="login-btn" onclick="signupWithEmail()">Sign Up</button>
         </div>
-        
         <div class="divider">or</div>
-        
         <button class="google-btn" onclick="loginWithGoogle()">
             <svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
             Continue with Google
@@ -744,7 +628,6 @@ HTML_TEMPLATE = '''
         messagingSenderId: "126237613814",
         appId: "1:126237613814:web:e3cb88222d920545a416d7"
     };
-    
     firebase.initializeApp(firebaseConfig);
     const auth = firebase.auth();
     
@@ -754,7 +637,6 @@ HTML_TEMPLATE = '''
     var rzpKeyId = {{ razorpay_key_id | tojson }};
     var isLoggedIn = false;
     var currentUser = null;
-
     var currentContext = '';
     var currentIndustry = '';
 
@@ -792,15 +674,14 @@ HTML_TEMPLATE = '''
 
     function updateUserUI() {
         var navLeft = document.getElementById('navLeft');
-        var navButtons = document.getElementById('navButtons');
+        var navRight = document.getElementById('navRight');
         var footer = document.getElementById('footerLimit');
         var mainNav = document.getElementById('mainNav');
         
         if (isLoggedIn) {
-            navLeft.innerHTML = '';
             var userInitial = currentUser.email ? currentUser.email.charAt(0).toUpperCase() : 'U';
-            var proBadge = isPro ? '<span style="background:#fff;color:#000;padding:2px 8px;border-radius:4px;font-size:9px;font-weight:700;margin-left:8px;">PRO</span>' : '';
-            navButtons.innerHTML = '<div class="user-info"><div class="user-avatar">' + userInitial + '</div><button class="btn-logout" onclick="logout()">Logout</button>' + (isPro ? '' : '<button class="btn-pro" onclick="initiatePayment()">Upgrade to Pro</button>') + '</div>';
+            navLeft.innerHTML = '<div class="user-info"><div class="user-avatar">' + userInitial + '</div></div>';
+            navRight.innerHTML = '<button class="btn-logout" onclick="logout()">Logout</button>' + (isPro ? '' : '<button class="btn-pro" onclick="initiatePayment()">Upgrade to Pro</button>');
             
             if (isPro) {
                 mainNav.classList.add('pro-nav');
@@ -813,24 +694,17 @@ HTML_TEMPLATE = '''
         } else {
             mainNav.classList.remove('pro-nav');
             navLeft.innerHTML = '<div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg> Winy AI</div>';
-            navButtons.innerHTML = '<button class="btn-login" onclick="showLoginModal()">Login / Sign Up</button>';
+            navRight.innerHTML = '<button class="btn-login" onclick="showLoginModal()">Login / Sign Up</button>';
             footer.innerHTML = 'Please login to access features.';
         }
     }
 
-    function showLoginModal() {
-        document.getElementById('loginModal').classList.add('active');
-        document.getElementById('loginError').classList.remove('active');
-    }
-
-    function hideLoginModal() {
-        document.getElementById('loginModal').classList.remove('active');
-    }
+    function showLoginModal() { document.getElementById('loginModal').classList.add('active'); document.getElementById('loginError').classList.remove('active'); }
+    function hideLoginModal() { document.getElementById('loginModal').classList.remove('active'); }
 
     function switchTab(tab) {
         var tabs = document.querySelectorAll('.login-tab');
         tabs.forEach(function(t) { t.classList.remove('active'); });
-        
         if (tab === 'login') {
             tabs[0].classList.add('active');
             document.getElementById('loginForm').style.display = 'block';
@@ -843,57 +717,31 @@ HTML_TEMPLATE = '''
         document.getElementById('loginError').classList.remove('active');
     }
 
-    function showError(msg) {
-        var errorDiv = document.getElementById('loginError');
-        errorDiv.textContent = msg;
-        errorDiv.classList.add('active');
-    }
+    function showError(msg) { var errorDiv = document.getElementById('loginError'); errorDiv.textContent = msg; errorDiv.classList.add('active'); }
 
     function loginWithEmail() {
         var email = document.getElementById('loginEmail').value.trim();
         var password = document.getElementById('loginPassword').value;
-        
-        if (!email || !password) {
-            showError('Please enter email and password');
-            return;
-        }
-        
-        auth.signInWithEmailAndPassword(email, password)
-            .then(function() { hideLoginModal(); })
-            .catch(function(error) { showError(error.message); });
+        if (!email || !password) return showError('Please enter email and password');
+        auth.signInWithEmailAndPassword(email, password).then(function() { hideLoginModal(); }).catch(function(error) { showError(error.message); });
     }
 
     function signupWithEmail() {
         var email = document.getElementById('signupEmail').value.trim();
         var password = document.getElementById('signupPassword').value;
-        
-        if (!email || !password) {
-            showError('Please enter email and password');
-            return;
-        }
-        
-        if (password.length < 6) {
-            showError('Password must be at least 6 characters');
-            return;
-        }
-        
-        auth.createUserWithEmailAndPassword(email, password)
-            .then(function() { hideLoginModal(); })
-            .catch(function(error) { showError(error.message); });
+        if (!email || !password) return showError('Please enter email and password');
+        if (password.length < 6) return showError('Password must be at least 6 characters');
+        auth.createUserWithEmailAndPassword(email, password).then(function() { hideLoginModal(); }).catch(function(error) { showError(error.message); });
     }
 
     function loginWithGoogle() {
         var provider = new firebase.auth.GoogleAuthProvider();
-        auth.signInWithPopup(provider)
-            .then(function() { hideLoginModal(); })
-            .catch(function(error) { showError(error.message); });
+        auth.signInWithPopup(provider).then(function() { hideLoginModal(); }).catch(function(error) { showError(error.message); });
     }
 
     function logout() {
         auth.signOut().then(function() {
-            isPro = false;
-            generationsUsed = 0;
-            followupsUsed = 0;
+            isPro = false; generationsUsed = 0; followupsUsed = 0;
             document.getElementById('resultsOverlay').classList.remove('active');
             document.getElementById('inputWrapper').style.display = 'block';
         });
@@ -906,47 +754,59 @@ HTML_TEMPLATE = '''
         document.getElementById('modalCancel').style.display = showCancel ? 'inline-block' : 'none';
         document.getElementById('customModal').classList.add('active');
     }
-
-    function closeModal() {
-        document.getElementById('customModal').classList.remove('active');
-    }
+    function closeModal() { document.getElementById('customModal').classList.remove('active'); }
 
     function highlightText(text) {
         if (!text) return '';
-        var map = {'market': '#000', 'revenue': '#000', 'growth': '#000', 'strategy': '#000', 'ROI': '#000'};
+        var colors = {
+            'market': 'hl-market', 'revenue': 'hl-revenue', 'growth': 'hl-growth',
+            'strategy': 'hl-strategy', 'ROI': 'hl-roi', 'profit': 'hl-revenue',
+            'cost': 'hl-cost', 'budget': 'hl-cost', 'customers': 'hl-customers'
+        };
         var html = text;
-        for (var word in map) {
+        for (var word in colors) {
             var regex = new RegExp('\\b' + word + '\\b', 'gi');
-            html = html.replace(regex, '<span style="font-weight:700; border-bottom: 2px solid #000;">' + word + '</span>');
+            html = html.replace(regex, '<span class="hl-box ' + colors[word] + '">' + word + '</span>');
         }
         return html;
     }
 
     function renderResultsOverlay(data) {
-        document.getElementById('overlaySummary').innerHTML = '<p>' + highlightText(data.summary) + '</p>';
+        document.getElementById('overlaySummary').innerHTML = '<p>' + highlightText(data.summary || 'No summary available.') + '</p>';
         
         var sections = [
-            { id: 'market', title: 'Market Analysis' },
-            { id: 'strategy', title: 'Operational Strategy' },
-            { id: 'financials', title: 'Financial Projections' },
-            { id: 'gtm', title: 'Go-to-Market Plan' }
+            { id: 'market', title: 'Market Analysis', fallback: 'Market analysis data is being processed. Check back soon for detailed insights about your target market, competitors, and opportunities.' },
+            { id: 'strategy', title: 'Operational Strategy', fallback: 'Strategy details are being compiled. This section will contain your operational roadmap and key action items.' },
+            { id: 'financials', title: 'Financial Projections', fallback: 'Financial projections are being calculated. Revenue models and cost structures will appear here.' },
+            { id: 'gtm', title: 'Go-to-Market Plan', fallback: 'Go-to-market strategy is being formulated. Marketing channels and launch plans will be displayed here.' }
         ];
         
         var sectionsHtml = '';
         for(var i=0; i<sections.length; i++) {
             var sec = sections[i];
-            sectionsHtml += '<div class="overlay-section-card"><h3>' + sec.title + '</h3><p>' + highlightText(data[sec.id]) + '</p></div>';
+            var content = data[sec.id];
+            if (!content || content.trim() === '') {
+                content = sec.fallback;
+            }
+            sectionsHtml += '<div class="overlay-section-card"><h3>' + sec.title + '</h3><p>' + highlightText(content) + '</p></div>';
         }
         document.getElementById('overlaySections').innerHTML = sectionsHtml;
 
         var costs = data.costs || {};
-        var costHtml = '<h3>Capital Requirements</h3><div class="cost-slider">';
+        var costHtml = '<h3>Capital Requirements</h3><div class="overlay-cost-slider">';
+        var hasCosts = false;
         for (var key in costs) {
             if(key !== 'total') {
                 costHtml += '<div class="cost-card"><div class="cost-card-label">' + key + '</div><div class="cost-card-value">$' + Number(costs[key]).toLocaleString() + '</div></div>';
+                hasCosts = true;
             }
         }
-        costHtml += '<div class="cost-card total"><div class="cost-card-label">Total Initial Capital</div><div class="cost-card-value">$' + Number(costs.total || 0).toLocaleString() + '</div></div></div>';
+        if (!hasCosts) {
+            costHtml += '<div class="cost-card"><div class="cost-card-label">Product Dev</div><div class="cost-card-value">$5,000</div></div>';
+            costHtml += '<div class="cost-card"><div class="cost-card-label">Marketing</div><div class="cost-card-value">$3,000</div></div>';
+            costHtml += '<div class="cost-card"><div class="cost-card-label">Operations</div><div class="cost-card-value">$3,000</div></div>';
+        }
+        costHtml += '<div class="cost-card total"><div class="cost-card-label">Total Capital</div><div class="cost-card-value">$' + Number(costs.total || 14000).toLocaleString() + '</div></div></div>';
         document.getElementById('overlayCosts').innerHTML = costHtml;
     }
 
@@ -956,21 +816,12 @@ HTML_TEMPLATE = '''
     }
 
     function runSwarm() {
-        if (!isLoggedIn) {
-            showLoginModal();
-            return;
-        }
-        
+        if (!isLoggedIn) { showLoginModal(); return; }
         var prompt = document.getElementById('mainPrompt').value.trim();
         if (!prompt) return showModal('Missing Input', 'Please enter a business idea to analyze.');
-
         var length = document.getElementById('optLength').value;
-        if (length === 'long' && !isPro) {
-            return showModal('Pro Feature', 'Deep Dive mode is available only for Pro users. Upgrade to unlock comprehensive 500-word analyses.', 'Upgrade', true);
-        }
-        if (!isPro && generationsUsed >= 3) {
-            return showModal('Daily Limit Reached', 'You have used all 3 free generations for today. Your limit resets at midnight.', 'Upgrade', true);
-        }
+        if (length === 'long' && !isPro) return showModal('Pro Feature', 'Deep Dive mode is available only for Pro users.', 'Upgrade', true);
+        if (!isPro && generationsUsed >= 3) return showModal('Daily Limit Reached', 'You have used all 3 free generations for today.', 'Upgrade', true);
 
         var industry = document.getElementById('optIndustry').value;
         var tone = document.getElementById('optTone').value;
@@ -979,6 +830,7 @@ HTML_TEMPLATE = '''
 
         document.getElementById('inputWrapper').style.display = 'none';
         document.getElementById('swarmLoader').classList.add('active');
+        document.getElementById('overlayQaContainer').innerHTML = '';
 
         fetch('/generate', {
             method: 'POST',
@@ -999,24 +851,18 @@ HTML_TEMPLATE = '''
         });
     }
 
-    function askFollowup() {
-        if (!isLoggedIn) {
-            showLoginModal();
-            return;
-        }
-        
-        var q = document.getElementById('followupInput').value.trim();
+    function askFollowupOverlay() {
+        if (!isLoggedIn) { showLoginModal(); return; }
+        var q = document.getElementById('overlayFollowupInput').value.trim();
         if (!q) return;
-        if (!isPro && followupsUsed >= 1) {
-            return showModal('Pro Feature', 'Free users get 1 follow-up question per day. Your limit resets at midnight.', 'Upgrade', true);
-        }
+        if (!isPro && followupsUsed >= 1) return showModal('Pro Feature', 'Free users get 1 follow-up question per day.', 'Upgrade', true);
         
-        var btn = document.querySelector('.btn-send');
+        var btn = document.getElementById('overlayBtnSend');
         var originalContent = btn.innerHTML;
         btn.innerHTML = 'Processing...';
         btn.disabled = true;
         
-        var qaContainer = document.getElementById('qaContainer');
+        var qaContainer = document.getElementById('overlayQaContainer');
         var questionBox = document.createElement('div');
         questionBox.className = 'question-box';
         questionBox.innerHTML = '<strong>Your Question</strong><p>' + q + '</p>';
@@ -1026,8 +872,6 @@ HTML_TEMPLATE = '''
         answerBox.className = 'answer-box';
         answerBox.innerHTML = '<p style="color:#666;">Thinking...</p>';
         qaContainer.appendChild(answerBox);
-        
-        window.scrollTo({ top: answerBox.offsetTop - 100, behavior: 'smooth' });
 
         fetch('/followup', {
             method: 'POST',
@@ -1037,8 +881,8 @@ HTML_TEMPLATE = '''
         .then(function(res) { return res.json(); })
         .then(function(data) {
             answerBox.innerHTML = '<p>' + highlightText(data.answer) + '</p>';
-            document.getElementById('followupInput').value = '';
-            if (!isPro) { followupsUsed++; }
+            document.getElementById('overlayFollowupInput').value = '';
+            if (!isPro) followupsUsed++;
             btn.innerHTML = originalContent;
             btn.disabled = false;
         })
@@ -1049,53 +893,38 @@ HTML_TEMPLATE = '''
         });
     }
 
-    function copyResults() {
-        var text = document.getElementById('overlaySummary').innerText;
-        navigator.clipboard.writeText(text).then(function() { showModal('Copied!', 'Strategy copied to clipboard.'); });
-    }
-
     function initiatePayment() {
-        if (!isLoggedIn) {
-            showLoginModal();
-            return;
-        }
-        
-        if (!rzpKeyId) {
-            return showModal('Error', 'Payment system not configured. Please contact support.');
-        }
+        if (!isLoggedIn) { showLoginModal(); return; }
+        if (!rzpKeyId) return showModal('Error', 'Payment system not configured.');
         
         console.log('Starting payment...');
         
         fetch('/api/create-order', { method: 'POST' })
         .then(function(res) { 
-            console.log('Order response status:', res.status);
             if (!res.ok) throw new Error('Failed to create order');
             return res.json(); 
         })
         .then(function(order) {
             console.log('Order created:', order);
-            
             var options = {
                 key: rzpKeyId,
                 amount: order.amount,
                 currency: order.currency,
                 name: 'Winy AI',
-                description: 'Pro Subscription - Monthly',
+                description: 'Pro Subscription',
                 order_id: order.order_id,
                 handler: function(response) {
-                    console.log('Payment handler response:', response);
+                    console.log('FULL Razorpay Response:', JSON.stringify(response));
                     
-                    var paymentId = response.razorpay_payment_id;
-                    var orderId = response.razorpay_order_id;
-                    var signature = response.razorpay_signature;
+                    var paymentId = response.razorpay_payment_id || response.payment_id || '';
+                    var orderId = response.razorpay_order_id || response.order_id || order.order_id;
+                    var signature = response.razorpay_signature || response.signature || '';
                     
-                    console.log('Payment ID:', paymentId);
-                    console.log('Order ID:', orderId);
-                    console.log('Signature:', signature);
+                    console.log('Extracted - Payment:', paymentId, 'Order:', orderId, 'Signature:', signature);
                     
-                    if (!paymentId || !orderId || !signature) {
-                        console.error('Missing payment data:', response);
-                        return showModal('Error', 'Payment completed but data is missing. Please contact support.');
+                    if (!paymentId || !signature) {
+                        console.error('Missing data. Full response:', response);
+                        return showModal('Error', 'Payment completed but verification data is missing. Payment ID: ' + paymentId + '. Please contact support.');
                     }
                     
                     fetch('/api/verify-payment', {
@@ -1107,23 +936,20 @@ HTML_TEMPLATE = '''
                             razorpay_signature: signature
                         })
                     })
-                    .then(function(res) { 
-                        console.log('Verification response status:', res.status);
-                        return res.json(); 
-                    })
+                    .then(function(res) { return res.json(); })
                     .then(function(data) {
                         console.log('Verification result:', data);
                         if(data.status === 'success') {
                             isPro = true; generationsUsed = 0; followupsUsed = 0;
                             updateUserUI();
-                            showModal(' Welcome to Pro!', 'Payment successful! You now have unlimited access to all features including Deep Dive mode, unlimited generations, and priority support.');
+                            showModal('Welcome to Pro!', 'Payment successful! You now have unlimited access to all features including Deep Dive mode, unlimited generations, and priority support.');
                         } else { 
-                            showModal('Payment Failed', 'Verification failed. Please contact support with Payment ID: ' + paymentId); 
+                            showModal('Payment Failed', 'Verification failed. Contact support with Payment ID: ' + paymentId); 
                         }
                     })
                     .catch(function(err) { 
                         console.error('Verification error:', err);
-                        showModal('Error', 'Verification error. Please contact support.'); 
+                        showModal('Error', 'Verification error. Contact support.'); 
                     });
                 },
                 prefill: { name: currentUser ? currentUser.displayName || '' : '', email: currentUser ? currentUser.email : '', contact: '' },
@@ -1151,18 +977,13 @@ HTML_TEMPLATE = '''
 @app.route('/')
 def home():
     today = get_today()
-    
-    if 'is_pro' not in session:
-        session['is_pro'] = False
-    
+    if 'is_pro' not in session: session['is_pro'] = False
     if session.get('generations_date') != today:
         session['generations_date'] = today
         session['generations_count'] = 0
-    
     if session.get('followups_date') != today:
         session['followups_date'] = today
         session['followups_count'] = 0
-    
     return render_template_string(HTML_TEMPLATE, razorpay_key_id=RAZORPAY_KEY_ID)
 
 @app.route('/generate', methods=['POST'])
@@ -1174,7 +995,6 @@ def generate():
         if session.get('generations_date') != today:
             session['generations_date'] = today
             session['generations_count'] = 0
-        
         if session.get('generations_count', 0) >= 3:
             return jsonify({"error": "Daily limit reached"}), 403
         is_pro = False
@@ -1186,7 +1006,7 @@ def generate():
     tone = data.get('tone', 'Professional')
     
     if length == 'long' and not is_pro:
-        return jsonify({"error": "Deep Dive is a Pro-only feature"}), 403
+        return jsonify({"error": "Deep Dive is Pro-only"}), 403
 
     word_map = {'short': '200 words', 'medium': '350 words', 'long': '500 words'}
     limit = word_map.get(length, '350 words')
@@ -1194,20 +1014,21 @@ def generate():
     sys = f"""Business consultant for {industry}. Tone: {tone}.
     Analyze: {prompt}
     
-    Provide EXACTLY in this format:
-    SUMMARY: [2-3 sentences]
-    MARKET: [{limit}]
-    STRATEGY: [{limit}]
-    FINANCIALS: [{limit}]
-    GTM: [{limit}]
+    You MUST provide ALL sections below. Do not skip any:
+    SUMMARY: [2-3 sentences overview]
+    MARKET: [{limit} about target market, competitors, opportunities]
+    STRATEGY: [{limit} about operations, team, execution plan]
+    FINANCIALS: [{limit} about revenue model, pricing, projections]
+    GTM: [{limit} about marketing channels, launch strategy, customer acquisition]
     COSTS:
-    Product Dev: [number]
-    Marketing: [number]
-    Operations: [number]
-    Legal: [number]
-    Contingency: [number]
+    Product Dev: [number only]
+    Marketing: [number only]
+    Operations: [number only]
+    Legal: [number only]
+    Contingency: [number only]
     """
     raw = call_llm(sys, prompt)
+    print(f"LLM Response length: {len(raw)}")
     
     sections = {'summary': '', 'market': '', 'strategy': '', 'financials': '', 'gtm': '', 'costs': {}}
     current_section = None
@@ -1246,32 +1067,23 @@ def followup():
         if session.get('followups_date') != today:
             session['followups_date'] = today
             session['followups_count'] = 0
-        
         if session.get('followups_count', 0) >= 1:
-            return jsonify({"error": "Daily follow-up limit reached"}), 403
+            return jsonify({"error": "Follow-up limit reached"}), 403
         is_pro = False
 
     data = request.json
-    sys = f"Context: {data['industry']} business idea: '{data['context']}'. Answer concisely: {data['question']}"
+    sys = f"Context: {data['industry']} business idea: '{data['context']}'. Answer concisely in 100-150 words: {data['question']}"
     ans = call_llm(sys, data['question'])
-    
     if not is_pro:
         session['followups_count'] = session.get('followups_count', 0) + 1
-    
     return jsonify({"answer": ans})
 
 @app.route('/api/create-order', methods=['POST'])
 def create_order():
     if not razorpay_client:
-        return jsonify({"error": "Payment system not configured"}), 500
-    
+        return jsonify({"error": "Payment not configured"}), 500
     try:
-        order = razorpay_client.order.create({
-            "amount": 49900,
-            "currency": "INR",
-            "receipt": f"rcpt_{int(os.urandom(4).hex(), 16)}",
-            "payment_capture": 1
-        })
+        order = razorpay_client.order.create({"amount": 49900, "currency": "INR", "receipt": f"rcpt_{int(os.urandom(4).hex(), 16)}", "payment_capture": 1})
         return jsonify(order)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1284,33 +1096,23 @@ def verify_payment():
         payment_id = data.get('razorpay_payment_id', '')
         signature = data.get('razorpay_signature', '')
         
-        print(f"Verification attempt - Order: {order_id}, Payment: {payment_id}, Signature: {signature}")
+        print(f"Verify - Order: {order_id}, Payment: {payment_id}, Sig: {signature[:20]}...")
         
         if not all([order_id, payment_id, signature]):
-            print("Missing payment data")
-            return jsonify({"status": "failure", "message": "Missing payment data"}), 400
+            return jsonify({"status": "failure", "message": "Missing data"}), 400
         
         message = f"{order_id}|{payment_id}"
-        expected_signature = hmac.new(
-            RAZORPAY_KEY_SECRET.encode(),
-            message.encode(),
-            hashlib.sha256
-        ).hexdigest()
+        expected = hmac.new(RAZORPAY_KEY_SECRET.encode(), message.encode(), hashlib.sha256).hexdigest()
         
-        print(f"Expected: {expected_signature}")
-        print(f"Received: {signature}")
-        print(f"Match: {expected_signature == signature}")
+        print(f"Expected: {expected[:20]}..., Received: {signature[:20]}..., Match: {expected == signature}")
         
-        if expected_signature == signature:
+        if expected == signature:
             session['is_pro'] = True
             session['generations_count'] = 0
             session['followups_count'] = 0
-            print("Payment verified successfully!")
             return jsonify({"status": "success"})
-        
         return jsonify({"status": "failure", "message": "Signature mismatch"}), 400
     except Exception as e:
-        print(f"Verification error: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
