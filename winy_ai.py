@@ -1,14 +1,13 @@
 from flask import Flask, request, jsonify, render_template_string, session
 import requests
 import re
-import json
 import os
 import razorpay
 import hmac
 import hashlib
-from datetime import datetime, timedelta
 
 app = Flask(__name__)
+# Secret key for secure sessions (prevents fake payments)
 app.secret_key = os.environ.get("SECRET_KEY", "winy-ai-secret-key-2024")
 
 # Groq API Configuration
@@ -58,15 +57,14 @@ HTML_TEMPLATE = '''
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
     <style>
         :root {
-            --bg: #000000;
-            --surface: #0a0a0a;
-            --surface-hover: #111111;
-            --border: #1a1a1a;
-            --border-hover: #333333;
-            --text: #ffffff;
-            --text-muted: #888888;
-            --accent: #ffffff;
-            --accent-text: #000000;
+            --bg: #ffffff;
+            --glass-bg: rgba(0, 0, 0, 0.02);
+            --glass-border: rgba(0, 0, 0, 0.08);
+            --glass-highlight: rgba(255, 255, 255, 0.8);
+            --text: #000000;
+            --text-muted: #666666;
+            --accent: #000000;
+            --accent-text: #ffffff;
             --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         }
 
@@ -79,68 +77,105 @@ HTML_TEMPLATE = '''
             min-height: 100vh;
             line-height: 1.5;
             -webkit-font-smoothing: antialiased;
+            position: relative;
+            overflow-x: hidden;
         }
 
-        h1, h2, h3 { font-weight: 500; letter-spacing: -0.02em; }
+        /* Background shapes for glass blur effect */
+        .bg-shape {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(100px);
+            z-index: 0;
+            pointer-events: none;
+        }
+        .shape-1 { width: 500px; height: 500px; background: #f0f0f0; top: -100px; left: -100px; }
+        .shape-2 { width: 400px; height: 400px; background: #e5e5e5; bottom: -100px; right: -50px; }
 
+        h1, h2, h3 { font-weight: 700; letter-spacing: -0.02em; }
+
+        /* Floating Glass Navbar */
         nav {
+            position: fixed;
+            top: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 90%;
+            max-width: 900px;
+            padding: 16px 24px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 24px 40px;
-            border-bottom: 1px solid var(--border);
-            position: sticky;
-            top: 0;
-            background: rgba(0,0,0,0.95);
-            backdrop-filter: blur(12px);
             z-index: 100;
+            background: rgba(255, 255, 255, 0.6);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+            border-radius: 100px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.04);
         }
-        .logo { font-size: 18px; font-weight: 600; letter-spacing: -0.5px; display: flex; align-items: center; gap: 8px; }
-        .logo svg { width: 20px; height: 20px; }
+        .logo { font-size: 16px; font-weight: 700; letter-spacing: -0.5px; display: flex; align-items: center; gap: 8px; }
+        .logo svg { width: 18px; height: 18px; }
 
         .btn-pro {
-            background: var(--accent);
-            color: var(--accent-text);
-            border: none;
+            background: rgba(0, 0, 0, 0.05);
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            color: var(--text);
             padding: 8px 16px;
-            font-size: 13px;
+            border-radius: 100px;
+            font-size: 12px;
             font-weight: 600;
-            border-radius: 6px;
             cursor: pointer;
-            transition: opacity 0.2s;
+            transition: all 0.3s ease;
         }
-        .btn-pro:hover { opacity: 0.8; }
+        .btn-pro:hover { background: rgba(0, 0, 0, 0.1); border-color: rgba(0, 0, 0, 0.2); }
 
-        .container { max-width: 900px; margin: 0 auto; padding: 60px 24px; }
+        .container { max-width: 900px; margin: 0 auto; padding: 120px 24px 60px; position: relative; z-index: 1; }
 
-        .hero { margin-bottom: 48px; }
-        .hero h1 { font-size: 40px; line-height: 1.1; margin-bottom: 12px; }
-        .hero p { color: var(--text-muted); font-size: 16px; max-width: 500px; }
+        .hero { margin-bottom: 48px; text-align: center; }
+        .hero h1 { font-size: 48px; line-height: 1.1; margin-bottom: 12px; letter-spacing: -1.5px; }
+        .hero p { color: var(--text-muted); font-size: 16px; max-width: 500px; margin: 0 auto; }
 
-        .input-wrapper { margin-bottom: 40px; }
+        /* Main Glass Card */
+        .glass-card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(40px);
+            -webkit-backdrop-filter: blur(40px);
+            border-top: 1px solid var(--glass-highlight);
+            border-left: 1px solid rgba(255, 255, 255, 0.5);
+            border-right: 1px solid rgba(0, 0, 0, 0.05);
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+            box-shadow: 0 30px 60px rgba(0, 0, 0, 0.06), inset 0 0 0 1px rgba(0, 0, 0, 0.03);
+            border-radius: 32px;
+            padding: 48px;
+            margin-bottom: 40px;
+        }
+
         .main-input {
             width: 100%;
-            background: var(--surface);
-            border: 1px solid var(--border);
+            background: rgba(0, 0, 0, 0.03);
+            border: 1px solid var(--glass-border);
             color: var(--text);
             font-size: 16px;
             font-family: var(--font);
-            padding: 16px;
-            border-radius: 8px;
+            padding: 20px 24px;
+            border-radius: 16px;
             resize: none;
             outline: none;
-            transition: border-color 0.3s;
+            transition: all 0.3s ease;
             min-height: 80px;
+            margin-bottom: 20px;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);
         }
-        .main-input:focus { border-color: var(--accent); }
-        .main-input::placeholder { color: #555; }
+        .main-input:focus { background: rgba(0, 0, 0, 0.05); border-color: rgba(0, 0, 0, 0.2); }
+        .main-input::placeholder { color: #999; }
 
         .options-slider {
             display: flex;
             gap: 16px;
             overflow-x: auto;
-            padding: 20px 0;
-            margin-bottom: 32px;
+            padding-bottom: 20px;
+            margin-bottom: 20px;
             scrollbar-width: none;
         }
         .options-slider::-webkit-scrollbar { display: none; }
@@ -148,13 +183,13 @@ HTML_TEMPLATE = '''
         .option-card {
             flex: 0 0 auto;
             min-width: 180px;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.03);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
             padding: 16px;
             transition: all 0.2s;
         }
-        .option-card:hover { border-color: var(--border-hover); }
+        .option-card:hover { border-color: rgba(0, 0, 0, 0.2); }
 
         .option-label {
             font-size: 10px;
@@ -177,58 +212,92 @@ HTML_TEMPLATE = '''
             appearance: none;
         }
 
+        /* Inverted Hover Button */
         .btn-launch {
-            background: var(--accent);
-            color: var(--accent-text);
-            border: none;
-            padding: 16px 32px;
-            font-size: 14px;
+            width: 100%;
+            background: rgba(0, 0, 0, 0.05);
+            backdrop-filter: blur(20px);
+            border-top: 1px solid rgba(255, 255, 255, 0.5);
+            border-left: 1px solid rgba(255, 255, 255, 0.2);
+            border-right: 1px solid rgba(0, 0, 0, 0.1);
+            border-bottom: 1px solid rgba(0, 0, 0, 0.2);
+            border-radius: 16px;
+            padding: 22px;
+            font-size: 15px;
             font-weight: 600;
-            border-radius: 8px;
+            color: var(--text);
             cursor: pointer;
-            transition: transform 0.2s, opacity 0.2s;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+            letter-spacing: 0.5px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.05), inset 0 1px 0 rgba(255,255,255,0.4);
             display: flex;
             align-items: center;
-            gap: 8px;
-            width: 100%;
             justify-content: center;
+            gap: 8px;
         }
-        .btn-launch:hover { transform: translateY(-2px); opacity: 0.9; }
-        .btn-launch:disabled { opacity: 0.3; cursor: not-allowed; transform: none; }
+        .btn-launch:hover {
+            background: var(--accent);
+            color: var(--accent-text);
+            border-color: var(--accent);
+            box-shadow: 0 15px 40px rgba(0, 0, 0, 0.2);
+            transform: translateY(-2px);
+        }
+        .btn-launch:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
+        /* ROBOTS GATHERING ANIMATION */
         .swarm-loader {
             display: none;
             flex-direction: column;
             align-items: center;
             justify-content: center;
             padding: 80px 0;
+            position: relative;
+            height: 300px;
         }
         .swarm-loader.active { display: flex; }
 
         .swarm-core {
-            width: 12px;
-            height: 12px;
+            width: 20px;
+            height: 20px;
             background: var(--accent);
             border-radius: 50%;
             position: relative;
-            animation: pulse-core 2s infinite ease-in-out;
+            z-index: 10;
+            box-shadow: 0 0 20px rgba(0,0,0,0.2);
+            animation: pulse-core 1.5s infinite ease-in-out;
         }
-        .swarm-core::before, .swarm-core::after {
-            content: '';
-            position: absolute;
-            top: 50%; left: 50%;
-            transform: translate(-50%, -50%);
-            border: 1px solid var(--accent);
-            border-radius: 50%;
-            animation: pulse-ring 2s infinite ease-out;
-        }
-        .swarm-core::after { animation-delay: 1s; }
+        @keyframes pulse-core { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.2); } }
 
-        @keyframes pulse-core { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.2); opacity: 0.8; } }
-        @keyframes pulse-ring { 0% { width: 12px; height: 12px; opacity: 1; } 100% { width: 100px; height: 100px; opacity: 0; } }
+        .robot {
+            position: absolute;
+            width: 24px;
+            height: 24px;
+            top: 50%;
+            left: 50%;
+            margin-top: -12px;
+            margin-left: -12px;
+            animation: gather-and-orbit 3s infinite ease-in-out;
+        }
+        .robot svg { width: 100%; height: 100%; fill: var(--text-muted); }
+        
+        /* Staggered animations for 6 robots */
+        .robot:nth-child(2) { animation-delay: 0s; }
+        .robot:nth-child(3) { animation-delay: 0.5s; }
+        .robot:nth-child(4) { animation-delay: 1s; }
+        .robot:nth-child(5) { animation-delay: 1.5s; }
+        .robot:nth-child(6) { animation-delay: 2s; }
+        .robot:nth-child(7) { animation-delay: 2.5s; }
+
+        @keyframes gather-and-orbit {
+            0% { transform: translate(0, 0) rotate(0deg) scale(0.5); opacity: 0; }
+            30% { transform: translate(var(--tx), var(--ty)) rotate(180deg) scale(1); opacity: 1; }
+            100% { transform: translate(var(--tx), var(--ty)) rotate(360deg) scale(1); opacity: 1; }
+        }
 
         .swarm-text {
-            margin-top: 32px;
+            margin-top: 40px;
             font-size: 12px;
             letter-spacing: 2px;
             text-transform: uppercase;
@@ -237,6 +306,7 @@ HTML_TEMPLATE = '''
         }
         @keyframes fade-text { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
 
+        /* Results Area */
         .results-area { display: none; animation: fadeIn 0.6s ease; }
         .results-area.active { display: block; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
@@ -247,34 +317,34 @@ HTML_TEMPLATE = '''
             align-items: center;
             margin-bottom: 32px;
             padding-bottom: 24px;
-            border-bottom: 1px solid var(--border);
+            border-bottom: 1px solid var(--glass-border);
         }
-        .results-header h2 { font-size: 18px; font-weight: 500; }
+        .results-header h2 { font-size: 18px; font-weight: 600; }
 
         .btn-icon {
             background: transparent;
-            border: 1px solid var(--border);
+            border: 1px solid var(--glass-border);
             color: var(--text);
             width: 36px; height: 36px;
-            border-radius: 6px;
+            border-radius: 100px;
             cursor: pointer;
             display: flex; align-items: center; justify-content: center;
             transition: all 0.2s;
         }
-        .btn-icon:hover { border-color: var(--accent); background: var(--surface); }
+        .btn-icon:hover { border-color: var(--accent); background: rgba(0,0,0,0.05); }
         .btn-icon svg { width: 16px; height: 16px; stroke-width: 2; }
 
         .unified-summary {
             font-size: 16px;
             line-height: 1.7;
-            color: #ccc;
+            color: #333;
             margin-bottom: 40px;
             padding-bottom: 40px;
-            border-bottom: 1px solid var(--border);
+            border-bottom: 1px solid var(--glass-border);
         }
 
         .accordion { margin-bottom: 40px; }
-        .accordion-item { border-bottom: 1px solid var(--border); }
+        .accordion-item { border-bottom: 1px solid var(--glass-border); }
 
         .accordion-header {
             display: flex;
@@ -284,14 +354,11 @@ HTML_TEMPLATE = '''
             cursor: pointer;
             transition: color 0.2s;
         }
-        .accordion-header:hover { color: #ccc; }
-        .accordion-title { font-size: 15px; font-weight: 500; display: flex; align-items: center; gap: 12px; }
+        .accordion-header:hover { color: #000; }
+        .accordion-title { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 12px; }
         .accordion-title svg { width: 18px; height: 18px; stroke-width: 1.5; color: var(--text-muted); }
 
-        .accordion-icon {
-            width: 20px; height: 20px;
-            transition: transform 0.3s ease;
-        }
+        .accordion-icon { width: 20px; height: 20px; transition: transform 0.3s ease; }
         .accordion-item.active .accordion-icon { transform: rotate(90deg); }
 
         .accordion-content {
@@ -299,151 +366,88 @@ HTML_TEMPLATE = '''
             overflow: hidden;
             transition: max-height 0.4s ease, padding 0.4s ease;
         }
-        .accordion-item.active .accordion-content {
-            max-height: 1000px;
-            padding-bottom: 24px;
-        }
-        .accordion-text {
-            font-size: 15px;
-            line-height: 1.8;
-            color: #aaa;
-            white-space: pre-wrap;
-        }
+        .accordion-item.active .accordion-content { max-height: 1000px; padding-bottom: 24px; }
+        .accordion-text { font-size: 15px; line-height: 1.8; color: #555; white-space: pre-wrap; }
 
         .cost-section { margin: 40px 0; }
-        .cost-slider {
-            display: flex;
-            gap: 16px;
-            overflow-x: auto;
-            padding: 20px 0;
-            scrollbar-width: none;
-        }
+        .cost-slider { display: flex; gap: 16px; overflow-x: auto; padding: 20px 0; scrollbar-width: none; }
         .cost-slider::-webkit-scrollbar { display: none; }
 
         .cost-card {
-            flex: 0 0 auto;
-            min-width: 180px;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 20px;
+            flex: 0 0 auto; min-width: 180px;
+            background: var(--glass-bg); border: 1px solid var(--glass-border);
+            border-radius: 16px; padding: 20px;
         }
         .cost-card-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
-        .cost-card-value { font-size: 24px; font-weight: 500; }
+        .cost-card-value { font-size: 24px; font-weight: 700; }
 
-        .cost-card.total {
-            background: var(--accent);
-            color: var(--accent-text);
-            border-color: var(--accent);
-        }
-        .cost-card.total .cost-card-label { color: #333; }
-        .cost-card.total .cost-card-value { font-weight: 600; }
+        .cost-card.total { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+        .cost-card.total .cost-card-label { color: #aaa; }
 
         .followup-wrapper {
-            margin-top: 40px;
-            padding-top: 40px;
-            border-top: 1px solid var(--border);
-            display: flex;
-            gap: 12px;
+            margin-top: 40px; padding-top: 40px; border-top: 1px solid var(--glass-border);
+            display: flex; gap: 12px;
         }
         .followup-input {
-            flex: 1;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            color: var(--text);
-            padding: 14px 16px;
-            border-radius: 8px;
-            font-size: 14px;
-            outline: none;
-            font-family: var(--font);
+            flex: 1; background: rgba(0,0,0,0.03); border: 1px solid var(--glass-border);
+            color: var(--text); padding: 14px 16px; border-radius: 100px;
+            font-size: 14px; outline: none; font-family: var(--font);
         }
-        .followup-input:focus { border-color: var(--accent); }
+        .followup-input:focus { border-color: rgba(0,0,0,0.2); }
         .btn-send {
-            background: var(--accent);
-            color: var(--accent-text);
-            border: none;
-            width: 44px; height: 44px;
-            border-radius: 8px;
-            cursor: pointer;
-            display: flex; align-items: center; justify-content: center;
+            background: var(--accent); color: var(--accent-text); border: none;
+            width: 44px; height: 44px; border-radius: 50%;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            transition: transform 0.2s;
         }
+        .btn-send:hover { transform: scale(1.05); }
         .btn-send svg { width: 18px; height: 18px; }
 
         .footer-limit {
-            margin-top: 60px;
-            padding-top: 24px;
-            border-top: 1px solid var(--border);
-            text-align: center;
-            font-size: 11px;
-            color: var(--text-muted);
+            margin-top: 60px; padding-top: 24px; border-top: 1px solid var(--glass-border);
+            text-align: center; font-size: 12px; color: var(--text-muted);
         }
-
-        .hl-green { color: #4ade80; border-bottom: 1px solid #4ade80; }
-        .hl-blue { color: #60a5fa; border-bottom: 1px solid #60a5fa; }
-        .hl-purple { color: #c084fc; border-bottom: 1px solid #c084fc; }
-        .hl-yellow { color: #facc15; border-bottom: 1px solid #facc15; }
 
         /* Custom Modal */
         .modal-overlay {
-            display: none;
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0,0,0,0.8);
-            backdrop-filter: blur(8px);
-            z-index: 1000;
-            align-items: center;
-            justify-content: center;
+            display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(255,255,255,0.8); backdrop-filter: blur(10px);
+            z-index: 1000; align-items: center; justify-content: center;
         }
         .modal-overlay.active { display: flex; }
         .modal {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 32px;
-            max-width: 400px;
-            width: 90%;
-            text-align: center;
+            background: #fff; border: 1px solid var(--glass-border);
+            border-radius: 24px; padding: 32px; max-width: 400px; width: 90%;
+            text-align: center; box-shadow: 0 20px 40px rgba(0,0,0,0.1);
         }
-        .modal h3 { font-size: 20px; margin-bottom: 16px; }
-        .modal p { color: var(--text-muted); margin-bottom: 24px; line-height: 1.6; }
+        .modal h3 { font-size: 20px; margin-bottom: 16px; font-weight: 700; }
+        .modal p { color: var(--text-muted); margin-bottom: 24px; line-height: 1.6; font-size: 14px; }
         .modal-btn {
-            background: var(--accent);
-            color: var(--accent-text);
-            border: none;
-            padding: 12px 24px;
-            border-radius: 8px;
-            font-weight: 600;
-            cursor: pointer;
-            margin: 0 8px;
+            background: var(--accent); color: var(--accent-text); border: none;
+            padding: 12px 24px; border-radius: 100px; font-weight: 600; cursor: pointer; margin: 0 8px;
+            transition: opacity 0.2s;
         }
-        .modal-btn.secondary {
-            background: transparent;
-            color: var(--text);
-            border: 1px solid var(--border);
-        }
+        .modal-btn:hover { opacity: 0.8; }
+        .modal-btn.secondary { background: transparent; color: var(--text); border: 1px solid var(--glass-border); }
 
         .pro-badge {
-            display: inline-block;
-            background: var(--accent);
-            color: var(--accent-text);
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 10px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            margin-left: 8px;
+            display: inline-block; background: var(--accent); color: var(--accent-text);
+            padding: 2px 8px; border-radius: 4px; font-size: 9px; font-weight: 700;
+            text-transform: uppercase; letter-spacing: 1px; margin-left: 8px; vertical-align: middle;
         }
 
         @media (max-width: 768px) {
-            .hero h1 { font-size: 32px; }
-            .container { padding: 40px 20px; }
-            nav { padding: 20px; }
-            .option-card { min-width: 160px; }
+            .hero h1 { font-size: 36px; }
+            .container { padding: 100px 20px 40px; }
+            .glass-card { padding: 24px; border-radius: 24px; }
+            nav { width: 95%; padding: 12px 20px; }
         }
     </style>
 </head>
 <body>
+
+<div class="bg-shape shape-1"></div>
+<div class="bg-shape shape-2"></div>
 
 <nav>
     <div class="logo">
@@ -459,49 +463,58 @@ HTML_TEMPLATE = '''
         <p>Elite business strategy generation. Deep research, financial modeling, and actionable roadmaps in seconds.</p>
     </div>
 
-    <div class="input-wrapper" id="inputWrapper">
-        <textarea class="main-input" id="mainPrompt" placeholder="Describe your business idea, challenge, or market..."></textarea>
+    <div id="inputWrapper">
+        <div class="glass-card">
+            <textarea class="main-input" id="mainPrompt" placeholder="Describe your business idea, challenge, or market..."></textarea>
 
-        <div class="options-slider">
-            <div class="option-card">
-                <span class="option-label">Industry</span>
-                <select class="option-select" id="optIndustry">
-                    <option value="General">General</option>
-                    <option value="Technology">Technology / SaaS</option>
-                    <option value="E-commerce">E-commerce / Retail</option>
-                    <option value="Food & Beverage">Food & Beverage</option>
-                    <option value="Real Estate">Real Estate</option>
-                    <option value="Healthcare">Healthcare</option>
-                    <option value="Finance">Finance / Fintech</option>
-                </select>
+            <div class="options-slider">
+                <div class="option-card">
+                    <span class="option-label">Industry</span>
+                    <select class="option-select" id="optIndustry">
+                        <option value="General">General</option>
+                        <option value="Technology">Technology / SaaS</option>
+                        <option value="E-commerce">E-commerce / Retail</option>
+                        <option value="Food & Beverage">Food & Beverage</option>
+                        <option value="Real Estate">Real Estate</option>
+                        <option value="Healthcare">Healthcare</option>
+                        <option value="Finance">Finance / Fintech</option>
+                    </select>
+                </div>
+                <div class="option-card">
+                    <span class="option-label">Depth</span>
+                    <select class="option-select" id="optLength">
+                        <option value="short">Brief (Quick Scan)</option>
+                        <option value="medium" selected>Standard (Detailed)</option>
+                        <option value="long">Deep Dive (Comprehensive)</option>
+                    </select>
+                </div>
+                <div class="option-card">
+                    <span class="option-label">Tone</span>
+                    <select class="option-select" id="optTone">
+                        <option value="Professional">Professional</option>
+                        <option value="Direct">Direct & Actionable</option>
+                        <option value="Analytical">Analytical</option>
+                        <option value="Persuasive">Persuasive (Pitch Deck)</option>
+                    </select>
+                </div>
             </div>
-            <div class="option-card">
-                <span class="option-label">Depth</span>
-                <select class="option-select" id="optLength">
-                    <option value="short">Brief (Quick Scan)</option>
-                    <option value="medium" selected>Standard (Detailed)</option>
-                    <option value="long">Deep Dive (Comprehensive) <span class="pro-badge">PRO</span></option>
-                </select>
-            </div>
-            <div class="option-card">
-                <span class="option-label">Tone</span>
-                <select class="option-select" id="optTone">
-                    <option value="Professional">Professional</option>
-                    <option value="Direct">Direct & Actionable</option>
-                    <option value="Analytical">Analytical</option>
-                    <option value="Persuasive">Persuasive (Pitch Deck)</option>
-                </select>
-            </div>
+
+            <button class="btn-launch" id="btnLaunch" onclick="runSwarm()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px;"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                Initialize Swarm
+            </button>
         </div>
-
-        <button class="btn-launch" id="btnLaunch" onclick="runSwarm()">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-            Initialize Swarm
-        </button>
     </div>
 
     <div class="swarm-loader" id="swarmLoader">
         <div class="swarm-core"></div>
+        <!-- 6 Robots Gathering -->
+        <div class="robot" style="--tx: -80px; --ty: -60px;"><svg viewBox="0 0 24 24"><path d="M12 2a2 2 0 0 1 2 2v2h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2V4a2 2 0 0 1 2-2z"/><circle cx="9" cy="11" r="1.5" fill="#fff"/><circle cx="15" cy="11" r="1.5" fill="#fff"/></svg></div>
+        <div class="robot" style="--tx: 80px; --ty: -60px;"><svg viewBox="0 0 24 24"><path d="M12 2a2 2 0 0 1 2 2v2h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2V4a2 2 0 0 1 2-2z"/><circle cx="9" cy="11" r="1.5" fill="#fff"/><circle cx="15" cy="11" r="1.5" fill="#fff"/></svg></div>
+        <div class="robot" style="--tx: -100px; --ty: 20px;"><svg viewBox="0 0 24 24"><path d="M12 2a2 2 0 0 1 2 2v2h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2V4a2 2 0 0 1 2-2z"/><circle cx="9" cy="11" r="1.5" fill="#fff"/><circle cx="15" cy="11" r="1.5" fill="#fff"/></svg></div>
+        <div class="robot" style="--tx: 100px; --ty: 20px;"><svg viewBox="0 0 24 24"><path d="M12 2a2 2 0 0 1 2 2v2h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2V4a2 2 0 0 1 2-2z"/><circle cx="9" cy="11" r="1.5" fill="#fff"/><circle cx="15" cy="11" r="1.5" fill="#fff"/></svg></div>
+        <div class="robot" style="--tx: -60px; --ty: 80px;"><svg viewBox="0 0 24 24"><path d="M12 2a2 2 0 0 1 2 2v2h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2V4a2 2 0 0 1 2-2z"/><circle cx="9" cy="11" r="1.5" fill="#fff"/><circle cx="15" cy="11" r="1.5" fill="#fff"/></svg></div>
+        <div class="robot" style="--tx: 60px; --ty: 80px;"><svg viewBox="0 0 24 24"><path d="M12 2a2 2 0 0 1 2 2v2h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2V4a2 2 0 0 1 2-2z"/><circle cx="9" cy="11" r="1.5" fill="#fff"/><circle cx="15" cy="11" r="1.5" fill="#fff"/></svg></div>
         <div class="swarm-text">Swarm Processing</div>
     </div>
 
@@ -522,7 +535,6 @@ HTML_TEMPLATE = '''
         </div>
 
         <div class="unified-summary" id="unifiedSummary"></div>
-
         <div class="accordion" id="accordionContainer"></div>
 
         <div class="cost-section" id="costSection">
@@ -539,7 +551,7 @@ HTML_TEMPLATE = '''
     </div>
 
     <div class="footer-limit" id="footerLimit">
-        You're currently on free tier. <span style="color:#fff; cursor:pointer; text-decoration:underline;" onclick="initiatePayment()">Upgrade to Pro</span> for unlimited access.
+        You're currently on free tier. <span style="color:#000; cursor:pointer; text-decoration:underline; font-weight:600;" onclick="initiatePayment()">Upgrade to Pro</span> for unlimited access.
     </div>
 </div>
 
@@ -562,6 +574,11 @@ HTML_TEMPLATE = '''
     let generationsUsed = {{ session.get('generations_used', 0) }};
     let followupsUsed = {{ session.get('followups_used', 0) }};
 
+    // Ensure buttons work by attaching events safely
+    document.addEventListener('DOMContentLoaded', function() {
+        updateUI();
+    });
+
     function showModal(title, message, confirmText = 'OK', showCancel = false) {
         document.getElementById('modalTitle').textContent = title;
         document.getElementById('modalMessage').textContent = message;
@@ -576,13 +593,11 @@ HTML_TEMPLATE = '''
 
     function updateUI() {
         if (isPro) {
-            document.getElementById('footerLimit').innerHTML = 'You are a <strong style="color:#fff;">Pro</strong> user. Unlimited access enabled.';
+            document.getElementById('footerLimit').innerHTML = 'You are a <strong style="color:#000;">Pro</strong> user. Unlimited access enabled.';
             document.getElementById('btnExport').style.display = 'flex';
-            document.querySelector('#optLength option[value="long"]').disabled = false;
         } else {
-            const remaining = 3 - generationsUsed;
-            document.getElementById('footerLimit').innerHTML = `Free tier: <strong style="color:#fff;">${remaining}</strong> generations remaining today. <span style="color:#fff; cursor:pointer; text-decoration:underline;" onclick="initiatePayment()">Upgrade to Pro</span> for unlimited.`;
-            document.querySelector('#optLength option[value="long"]').disabled = true;
+            const remaining = Math.max(0, 3 - generationsUsed);
+            document.getElementById('footerLimit').innerHTML = `Free tier: <strong style="color:#000;">${remaining}</strong> generations remaining today. <span style="color:#000; cursor:pointer; text-decoration:underline; font-weight:600;" onclick="initiatePayment()">Upgrade to Pro</span> for unlimited.`;
         }
     }
 
@@ -595,7 +610,7 @@ HTML_TEMPLATE = '''
         let html = text;
         for (const [word, cls] of Object.entries(map)) {
             const regex = new RegExp(`\\b${word}\\b`, 'gi');
-            html = html.replace(regex, `<span class="${cls}">${word}</span>`);
+            html = html.replace(regex, `<span style="font-weight:600; border-bottom: 2px solid currentColor; padding-bottom: 2px;">${word}</span>`);
         }
         return html;
     }
@@ -673,6 +688,12 @@ HTML_TEMPLATE = '''
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ prompt, industry, length, tone })
             });
+            
+            if (!res.ok) {
+                const errData = await res.json();
+                throw new Error(errData.error || 'Server error');
+            }
+
             const data = await res.json();
             document.getElementById('swarmLoader').classList.remove('active');
             document.getElementById('inputWrapper').style.display = 'block';
@@ -700,7 +721,9 @@ HTML_TEMPLATE = '''
         }
 
         const btn = document.querySelector('.btn-send');
-        btn.innerHTML = '<div style="width:16px;height:16px;border:2px solid #000;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;"></div>';
+        const originalSvg = btn.innerHTML;
+        btn.innerHTML = '<div style="width:16px;height:16px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;"></div>';
+        btn.disabled = true;
 
         try {
             const res = await fetch('/followup', {
@@ -708,10 +731,13 @@ HTML_TEMPLATE = '''
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ question: q, context: currentContext, industry: currentIndustry })
             });
+            
+            if (!res.ok) throw new Error('Follow-up limit reached or server error');
+            
             const data = await res.json();
 
             const summaryEl = document.getElementById('unifiedSummary');
-            summaryEl.innerHTML += `<br><br><strong style="color:#fff;">Q: ${q}</strong><br><br>${highlightText(data.answer)}`;
+            summaryEl.innerHTML += `<br><br><strong style="color:#000;">Q: ${q}</strong><br><br>${highlightText(data.answer)}`;
             document.getElementById('followupInput').value = '';
 
             if (!isPro) {
@@ -721,7 +747,8 @@ HTML_TEMPLATE = '''
             showModal('Error', 'Follow-up failed: ' + e.message);
         }
 
-        btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>';
+        btn.innerHTML = originalSvg;
+        btn.disabled = false;
     }
 
     function copyResults() {
@@ -740,6 +767,7 @@ HTML_TEMPLATE = '''
     async function initiatePayment() {
         try {
             const orderRes = await fetch('/api/create-order', { method: 'POST' });
+            if (!orderRes.ok) throw new Error('Failed to create order');
             const order = await orderRes.json();
             
             const options = {
@@ -761,12 +789,14 @@ HTML_TEMPLATE = '''
                     }).then(res => res.json()).then(data => {
                         if(data.status === 'success') {
                             isPro = true;
+                            generationsUsed = 0;
+                            followupsUsed = 0;
                             updateUI();
                             showModal('Payment Successful!', 'Welcome to Winy AI Pro! You now have unlimited access to all features.');
                         } else {
                             showModal('Payment Failed', 'Payment verification failed. Please contact support.');
                         }
-                    });
+                    }).catch(err => showModal('Error', 'Verification failed: ' + err.message));
                 },
                 prefill: { name: '', email: '', contact: '' },
                 theme: { color: '#000000' },
@@ -783,9 +813,6 @@ HTML_TEMPLATE = '''
             showModal('Error', 'Failed to initiate payment: ' + e.message);
         }
     }
-
-    // Initialize UI on load
-    updateUI();
 </script>
 <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
 </body>
@@ -805,7 +832,7 @@ def home():
 @app.route('/generate', methods=['POST'])
 def generate():
     if not session.get('is_pro') and session.get('generations_used', 0) >= 3:
-        return jsonify({"error": "Daily limit reached"}), 403
+        return jsonify({"error": "Daily limit reached. Upgrade to Pro."}), 403
 
     data = request.json
     prompt = data['prompt']
@@ -857,25 +884,18 @@ def generate():
     current_section = None
     for line in raw.split('\n'):
         line = line.strip()
-        if line.startswith('SUMMARY:'):
-            current_section = 'summary'
-        elif line.startswith('MARKET:'):
-            current_section = 'market'
-        elif line.startswith('STRATEGY:'):
-            current_section = 'strategy'
-        elif line.startswith('FINANCIALS:'):
-            current_section = 'financials'
-        elif line.startswith('GTM:'):
-            current_section = 'gtm'
-        elif line.startswith('COSTS:'):
-            current_section = 'costs'
+        if line.startswith('SUMMARY:'): current_section = 'summary'
+        elif line.startswith('MARKET:'): current_section = 'market'
+        elif line.startswith('STRATEGY:'): current_section = 'strategy'
+        elif line.startswith('FINANCIALS:'): current_section = 'financials'
+        elif line.startswith('GTM:'): current_section = 'gtm'
+        elif line.startswith('COSTS:'): current_section = 'costs'
         elif current_section and line:
             if current_section == 'costs' and ':' in line:
                 try:
                     key, val = line.split(':', 1)
                     sections['costs'][key.strip()] = int(val.strip().replace(',', '').replace('$', ''))
-                except:
-                    pass
+                except: pass
             elif current_section:
                 sections[current_section] += line + "\n"
 
@@ -918,14 +938,12 @@ def followup():
 def create_order():
     try:
         amount = 49900  # ₹499 in paise
-        
         order = razorpay_client.order.create({
             "amount": amount,
             "currency": "INR",
             "receipt": f"receipt_{int(os.urandom(4).hex(), 16)}",
             "payment_capture": 1
         })
-        
         return jsonify({
             "order_id": order["id"],
             "amount": order["amount"],
@@ -958,13 +976,6 @@ def verify_payment():
             return jsonify({"status": "failure"}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-@app.route('/reset-limits', methods=['POST'])
-def reset_limits():
-    # Call this once per day via cron job or manually
-    session['generations_used'] = 0
-    session['followups_used'] = 0
-    return jsonify({"status": "reset"})
 
 if __name__ == '__main__':
     print("\n[WINY AI] Swarm Online. Port 5000.\n")
