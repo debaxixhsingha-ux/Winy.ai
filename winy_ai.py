@@ -7,7 +7,6 @@ import hmac
 import hashlib
 
 app = Flask(__name__)
-# Secret key for secure sessions (prevents fake payments)
 app.secret_key = os.environ.get("SECRET_KEY", "winy-ai-secret-key-2024")
 
 # Groq API Configuration
@@ -81,7 +80,6 @@ HTML_TEMPLATE = '''
             overflow-x: hidden;
         }
 
-        /* Background shapes for glass blur effect */
         .bg-shape {
             position: fixed;
             border-radius: 50%;
@@ -94,7 +92,6 @@ HTML_TEMPLATE = '''
 
         h1, h2, h3 { font-weight: 700; letter-spacing: -0.02em; }
 
-        /* Floating Glass Navbar */
         nav {
             position: fixed;
             top: 24px;
@@ -136,7 +133,6 @@ HTML_TEMPLATE = '''
         .hero h1 { font-size: 48px; line-height: 1.1; margin-bottom: 12px; letter-spacing: -1.5px; }
         .hero p { color: var(--text-muted); font-size: 16px; max-width: 500px; margin: 0 auto; }
 
-        /* Main Glass Card */
         .glass-card {
             background: var(--glass-bg);
             backdrop-filter: blur(40px);
@@ -212,7 +208,6 @@ HTML_TEMPLATE = '''
             appearance: none;
         }
 
-        /* Inverted Hover Button */
         .btn-launch {
             width: 100%;
             background: rgba(0, 0, 0, 0.05);
@@ -246,7 +241,6 @@ HTML_TEMPLATE = '''
         }
         .btn-launch:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
-        /* ROBOTS GATHERING ANIMATION */
         .swarm-loader {
             display: none;
             flex-direction: column;
@@ -282,7 +276,6 @@ HTML_TEMPLATE = '''
         }
         .robot svg { width: 100%; height: 100%; fill: var(--text-muted); }
         
-        /* Staggered animations for 6 robots */
         .robot:nth-child(2) { animation-delay: 0s; }
         .robot:nth-child(3) { animation-delay: 0.5s; }
         .robot:nth-child(4) { animation-delay: 1s; }
@@ -306,7 +299,6 @@ HTML_TEMPLATE = '''
         }
         @keyframes fade-text { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
 
-        /* Results Area */
         .results-area { display: none; animation: fadeIn 0.6s ease; }
         .results-area.active { display: block; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
@@ -408,7 +400,6 @@ HTML_TEMPLATE = '''
             text-align: center; font-size: 12px; color: var(--text-muted);
         }
 
-        /* Custom Modal */
         .modal-overlay {
             display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
             background: rgba(255,255,255,0.8); backdrop-filter: blur(10px);
@@ -508,7 +499,6 @@ HTML_TEMPLATE = '''
 
     <div class="swarm-loader" id="swarmLoader">
         <div class="swarm-core"></div>
-        <!-- 6 Robots Gathering -->
         <div class="robot" style="--tx: -80px; --ty: -60px;"><svg viewBox="0 0 24 24"><path d="M12 2a2 2 0 0 1 2 2v2h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2V4a2 2 0 0 1 2-2z"/><circle cx="9" cy="11" r="1.5" fill="#fff"/><circle cx="15" cy="11" r="1.5" fill="#fff"/></svg></div>
         <div class="robot" style="--tx: 80px; --ty: -60px;"><svg viewBox="0 0 24 24"><path d="M12 2a2 2 0 0 1 2 2v2h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2V4a2 2 0 0 1 2-2z"/><circle cx="9" cy="11" r="1.5" fill="#fff"/><circle cx="15" cy="11" r="1.5" fill="#fff"/></svg></div>
         <div class="robot" style="--tx: -100px; --ty: 20px;"><svg viewBox="0 0 24 24"><path d="M12 2a2 2 0 0 1 2 2v2h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2V4a2 2 0 0 1 2-2z"/><circle cx="9" cy="11" r="1.5" fill="#fff"/><circle cx="15" cy="11" r="1.5" fill="#fff"/></svg></div>
@@ -555,7 +545,6 @@ HTML_TEMPLATE = '''
     </div>
 </div>
 
-<!-- Custom Modal -->
 <div class="modal-overlay" id="customModal">
     <div class="modal">
         <h3 id="modalTitle">Title</h3>
@@ -568,16 +557,15 @@ HTML_TEMPLATE = '''
 </div>
 
 <script>
+    console.log('Winy AI Script Loaded Successfully');
+    
     let currentContext = '';
     let currentIndustry = '';
-    let isPro = {{ 'true' if session.get('is_pro') else 'false' }};
-    let generationsUsed = {{ session.get('generations_used', 0) }};
-    let followupsUsed = {{ session.get('followups_used', 0) }};
-
-    // Ensure buttons work by attaching events safely
-    document.addEventListener('DOMContentLoaded', function() {
-        updateUI();
-    });
+    
+    // Safe Jinja parsing to prevent JS crashes
+    let isPro = {{ session.get('is_pro', false) | tojson }};
+    let generationsUsed = {{ session.get('generations_used', 0) | tojson }};
+    let followupsUsed = {{ session.get('followups_used', 0) | tojson }};
 
     function showModal(title, message, confirmText = 'OK', showCancel = false) {
         document.getElementById('modalTitle').textContent = title;
@@ -660,6 +648,7 @@ HTML_TEMPLATE = '''
     }
 
     async function runSwarm() {
+        console.log('Run Swarm clicked');
         const prompt = document.getElementById('mainPrompt').value.trim();
         if (!prompt) return showModal('Missing Input', 'Please enter a business idea to analyze.');
 
@@ -690,7 +679,7 @@ HTML_TEMPLATE = '''
             });
             
             if (!res.ok) {
-                const errData = await res.json();
+                const errData = await res.json().catch(() => ({error: 'Server error'}));
                 throw new Error(errData.error || 'Server error');
             }
 
@@ -706,6 +695,7 @@ HTML_TEMPLATE = '''
 
             renderResults(data);
         } catch (e) {
+            console.error('Swarm Error:', e);
             showModal('Error', 'Failed to generate strategy: ' + e.message);
             document.getElementById('swarmLoader').classList.remove('active');
             document.getElementById('inputWrapper').style.display = 'block';
@@ -771,7 +761,7 @@ HTML_TEMPLATE = '''
             const order = await orderRes.json();
             
             const options = {
-                key: "{{ razorpay_key_id }}",
+                key: {{ razorpay_key_id | tojson }},
                 amount: order.amount,
                 currency: order.currency,
                 name: 'Winy AI',
@@ -813,6 +803,9 @@ HTML_TEMPLATE = '''
             showModal('Error', 'Failed to initiate payment: ' + e.message);
         }
     }
+
+    // Initialize UI on load
+    updateUI();
 </script>
 <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
 </body>
