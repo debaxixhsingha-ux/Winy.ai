@@ -99,7 +99,24 @@ HTML_TEMPLATE = '''
             backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
             border: 1px solid var(--glass-border); border-radius: 100px;
             box-shadow: 0 10px 30px rgba(0, 0, 0, 0.04);
+            transition: all 0.5s ease;
         }
+        nav.pro-nav {
+            background: #000;
+            border-color: #333;
+        }
+        nav.pro-nav .logo, nav.pro-nav .user-info, nav.pro-nav .btn-pro, nav.pro-nav .btn-logout {
+            color: #fff;
+        }
+        nav.pro-nav .btn-pro {
+            background: #fff;
+            color: #000;
+        }
+        nav.pro-nav .btn-logout {
+            border-color: rgba(255,255,255,0.3);
+            color: rgba(255,255,255,0.7);
+        }
+
         .logo { font-size: 16px; font-weight: 700; letter-spacing: -0.5px; display: flex; align-items: center; gap: 8px; }
         .logo svg { width: 18px; height: 18px; }
 
@@ -461,21 +478,142 @@ HTML_TEMPLATE = '''
         }
         .login-error.active { display: block; }
 
+        /* Results Overlay */
+        .results-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(255,255,255,0.95);
+            backdrop-filter: blur(20px);
+            z-index: 1500;
+            overflow-y: auto;
+        }
+        .results-overlay.active { display: block; }
+        .overlay-header {
+            position: sticky;
+            top: 0;
+            background: rgba(255,255,255,0.9);
+            backdrop-filter: blur(20px);
+            padding: 20px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--glass-border);
+            z-index: 10;
+        }
+        .overlay-header h2 {
+            font-size: 20px;
+            font-weight: 700;
+        }
+        .close-overlay {
+            background: var(--accent);
+            color: var(--accent-text);
+            border: none;
+            width: 40px; height: 40px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            transition: transform 0.2s;
+        }
+        .close-overlay:hover { transform: scale(1.1); }
+        
+        .overlay-content {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 40px 24px;
+        }
+        
+        .overlay-summary {
+            font-size: 18px;
+            line-height: 1.7;
+            color: #333;
+            margin-bottom: 40px;
+            padding: 32px;
+            background: rgba(0,0,0,0.02);
+            border-radius: 24px;
+            border-left: 4px solid var(--accent);
+        }
+        
+        .overlay-sections {
+            display: flex;
+            gap: 20px;
+            overflow-x: auto;
+            scroll-snap-type: x mandatory;
+            padding: 20px 0;
+            scrollbar-width: none;
+        }
+        .overlay-sections::-webkit-scrollbar { display: none; }
+        
+        .overlay-section-card {
+            flex: 0 0 85%;
+            max-width: 400px;
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+            border-radius: 24px;
+            padding: 32px;
+            scroll-snap-align: center;
+            transition: transform 0.3s ease;
+        }
+        .overlay-section-card:hover {
+            transform: translateY(-4px);
+        }
+        .overlay-section-card h3 {
+            font-size: 16px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-bottom: 16px;
+        }
+        .overlay-section-card p {
+            font-size: 15px;
+            line-height: 1.7;
+            color: var(--text);
+        }
+        
+        .overlay-costs {
+            margin-top: 40px;
+            padding: 32px;
+            background: rgba(0,0,0,0.02);
+            border-radius: 24px;
+        }
+        .overlay-costs h3 {
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-bottom: 20px;
+        }
+        
+        .swipe-hint {
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 12px;
+            margin-top: 20px;
+            opacity: 0.7;
+        }
+
         @media (max-width: 768px) {
             .hero h1 { font-size: 36px; } .container { padding: 100px 20px 40px; }
             .glass-card { padding: 24px; border-radius: 24px; } nav { width: 95%; padding: 12px 20px; }
             .results-grid { grid-template-columns: 1fr; }
             .login-card { padding: 32px; }
+            .overlay-section-card { flex: 0 0 90%; }
         }
     </style>
 </head>
 <body>
 <div class="bg-shape shape-1"></div><div class="bg-shape shape-2"></div>
 
-<nav>
-    <div class="logo">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
-        Winy AI
+<nav id="mainNav">
+    <div id="navLeft">
+        <div class="logo">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+            Winy AI
+        </div>
     </div>
     <div id="navButtons">
         <button class="btn-login" onclick="showLoginModal()">Login / Sign Up</button>
@@ -533,42 +671,22 @@ HTML_TEMPLATE = '''
         <div class="swarm-text">Swarm Processing</div>
     </div>
 
-    <div class="results-area" id="resultsArea">
-        <div class="results-header">
-            <h2>Strategic Output</h2>
-            <div style="display:flex; gap:8px;">
-                <button class="btn-icon" onclick="copyResults()" title="Copy Text">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                </button>
-                <button class="btn-icon" onclick="runSwarm()" title="Regenerate">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path></svg>
-                </button>
-            </div>
-        </div>
-        
-        <div class="unified-summary" id="unifiedSummary"></div>
-        
-        <div class="results-grid" id="resultsGrid"></div>
-        
-        <div class="cost-section" id="costSection">
-            <div class="option-label" style="margin-bottom:16px;">Capital Requirements</div>
-            <div class="cost-slider" id="costSlider"></div>
-        </div>
-
-        <div class="followup-wrapper" id="followupSection">
-            <span class="followup-label">Follow-up Question</span>
-            <input type="text" class="followup-input" id="followupInput" placeholder="Ask the swarm anything about this strategy...">
-            <button class="btn-send" onclick="askFollowup()">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-                Ask Swarm
-            </button>
-        </div>
-        
-        <div id="qaContainer"></div>
-    </div>
-
     <div class="footer-limit" id="footerLimit">
         Please login to access features.
+    </div>
+</div>
+
+<!-- Results Overlay -->
+<div class="results-overlay" id="resultsOverlay">
+    <div class="overlay-header">
+        <h2>Strategic Output</h2>
+        <button class="close-overlay" onclick="closeResultsOverlay()">✕</button>
+    </div>
+    <div class="overlay-content">
+        <div class="overlay-summary" id="overlaySummary"></div>
+        <div class="overlay-sections" id="overlaySections"></div>
+        <div class="swipe-hint">← Swipe to explore sections →</div>
+        <div class="overlay-costs" id="overlayCosts"></div>
     </div>
 </div>
 
@@ -618,7 +736,6 @@ HTML_TEMPLATE = '''
 </div>
 
 <script>
-    // Firebase Configuration
     const firebaseConfig = {
         apiKey: "AIzaSyBUmnO-o2UaVKuaPqHBdLwm03dcfpOWzDU",
         authDomain: "winy-3984d.firebaseapp.com",
@@ -641,7 +758,6 @@ HTML_TEMPLATE = '''
     var currentContext = '';
     var currentIndustry = '';
 
-    // Listen to auth state changes
     auth.onAuthStateChanged(function(user) {
         if (user) {
             isLoggedIn = true;
@@ -675,20 +791,28 @@ HTML_TEMPLATE = '''
     }
 
     function updateUserUI() {
+        var navLeft = document.getElementById('navLeft');
         var navButtons = document.getElementById('navButtons');
         var footer = document.getElementById('footerLimit');
+        var mainNav = document.getElementById('mainNav');
         
         if (isLoggedIn) {
-            var userInitial = currentUser.email.charAt(0).toUpperCase();
+            navLeft.innerHTML = '';
+            var userInitial = currentUser.email ? currentUser.email.charAt(0).toUpperCase() : 'U';
+            var proBadge = isPro ? '<span style="background:#fff;color:#000;padding:2px 8px;border-radius:4px;font-size:9px;font-weight:700;margin-left:8px;">PRO</span>' : '';
             navButtons.innerHTML = '<div class="user-info"><div class="user-avatar">' + userInitial + '</div><button class="btn-logout" onclick="logout()">Logout</button>' + (isPro ? '' : '<button class="btn-pro" onclick="initiatePayment()">Upgrade to Pro</button>') + '</div>';
             
             if (isPro) {
+                mainNav.classList.add('pro-nav');
                 footer.innerHTML = 'You are a <strong style="color:#000;">Pro</strong> user. Unlimited access enabled.';
             } else {
+                mainNav.classList.remove('pro-nav');
                 var remaining = Math.max(0, 3 - generationsUsed);
                 footer.innerHTML = 'Free tier: <strong style="color:#000;">' + remaining + '</strong> generations remaining today. Resets at midnight. <span style="color:#000; cursor:pointer; text-decoration:underline; font-weight:600;" onclick="initiatePayment()">Upgrade to Pro</span> for unlimited.';
             }
         } else {
+            mainNav.classList.remove('pro-nav');
+            navLeft.innerHTML = '<div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg> Winy AI</div>';
             navButtons.innerHTML = '<button class="btn-login" onclick="showLoginModal()">Login / Sign Up</button>';
             footer.innerHTML = 'Please login to access features.';
         }
@@ -735,12 +859,8 @@ HTML_TEMPLATE = '''
         }
         
         auth.signInWithEmailAndPassword(email, password)
-            .then(function() {
-                hideLoginModal();
-            })
-            .catch(function(error) {
-                showError(error.message);
-            });
+            .then(function() { hideLoginModal(); })
+            .catch(function(error) { showError(error.message); });
     }
 
     function signupWithEmail() {
@@ -758,23 +878,15 @@ HTML_TEMPLATE = '''
         }
         
         auth.createUserWithEmailAndPassword(email, password)
-            .then(function() {
-                hideLoginModal();
-            })
-            .catch(function(error) {
-                showError(error.message);
-            });
+            .then(function() { hideLoginModal(); })
+            .catch(function(error) { showError(error.message); });
     }
 
     function loginWithGoogle() {
         var provider = new firebase.auth.GoogleAuthProvider();
         auth.signInWithPopup(provider)
-            .then(function() {
-                hideLoginModal();
-            })
-            .catch(function(error) {
-                showError(error.message);
-            });
+            .then(function() { hideLoginModal(); })
+            .catch(function(error) { showError(error.message); });
     }
 
     function logout() {
@@ -782,7 +894,7 @@ HTML_TEMPLATE = '''
             isPro = false;
             generationsUsed = 0;
             followupsUsed = 0;
-            document.getElementById('resultsArea').classList.remove('active');
+            document.getElementById('resultsOverlay').classList.remove('active');
             document.getElementById('inputWrapper').style.display = 'block';
         });
     }
@@ -810,8 +922,8 @@ HTML_TEMPLATE = '''
         return html;
     }
 
-    function renderResults(data) {
-        document.getElementById('unifiedSummary').innerHTML = '<p>' + highlightText(data.summary) + '</p>';
+    function renderResultsOverlay(data) {
+        document.getElementById('overlaySummary').innerHTML = '<p>' + highlightText(data.summary) + '</p>';
         
         var sections = [
             { id: 'market', title: 'Market Analysis' },
@@ -820,22 +932,27 @@ HTML_TEMPLATE = '''
             { id: 'gtm', title: 'Go-to-Market Plan' }
         ];
         
-        var gridHtml = '';
+        var sectionsHtml = '';
         for(var i=0; i<sections.length; i++) {
             var sec = sections[i];
-            gridHtml += '<div class="result-box"><h3>' + sec.title + '</h3><p>' + highlightText(data[sec.id]) + '</p></div>';
+            sectionsHtml += '<div class="overlay-section-card"><h3>' + sec.title + '</h3><p>' + highlightText(data[sec.id]) + '</p></div>';
         }
-        document.getElementById('resultsGrid').innerHTML = gridHtml;
+        document.getElementById('overlaySections').innerHTML = sectionsHtml;
 
         var costs = data.costs || {};
-        var costHtml = '';
+        var costHtml = '<h3>Capital Requirements</h3><div class="cost-slider">';
         for (var key in costs) {
             if(key !== 'total') {
                 costHtml += '<div class="cost-card"><div class="cost-card-label">' + key + '</div><div class="cost-card-value">$' + Number(costs[key]).toLocaleString() + '</div></div>';
             }
         }
-        costHtml += '<div class="cost-card total"><div class="cost-card-label">Total Initial Capital</div><div class="cost-card-value">$' + Number(costs.total || 0).toLocaleString() + '</div></div>';
-        document.getElementById('costSlider').innerHTML = costHtml;
+        costHtml += '<div class="cost-card total"><div class="cost-card-label">Total Initial Capital</div><div class="cost-card-value">$' + Number(costs.total || 0).toLocaleString() + '</div></div></div>';
+        document.getElementById('overlayCosts').innerHTML = costHtml;
+    }
+
+    function closeResultsOverlay() {
+        document.getElementById('resultsOverlay').classList.remove('active');
+        document.getElementById('inputWrapper').style.display = 'block';
     }
 
     function runSwarm() {
@@ -861,9 +978,7 @@ HTML_TEMPLATE = '''
         currentIndustry = industry;
 
         document.getElementById('inputWrapper').style.display = 'none';
-        document.getElementById('resultsArea').classList.remove('active');
         document.getElementById('swarmLoader').classList.add('active');
-        document.getElementById('qaContainer').innerHTML = '';
 
         fetch('/generate', {
             method: 'POST',
@@ -873,11 +988,9 @@ HTML_TEMPLATE = '''
         .then(function(res) { return res.json(); })
         .then(function(data) {
             document.getElementById('swarmLoader').classList.remove('active');
-            document.getElementById('inputWrapper').style.display = 'block';
-            document.getElementById('resultsArea').classList.add('active');
+            renderResultsOverlay(data);
+            document.getElementById('resultsOverlay').classList.add('active');
             if (!isPro) { generationsUsed++; updateUserUI(); }
-            renderResults(data);
-            window.scrollTo({ top: document.getElementById('resultsArea').offsetTop - 100, behavior: 'smooth' });
         })
         .catch(function(e) {
             document.getElementById('swarmLoader').classList.remove('active');
@@ -937,7 +1050,7 @@ HTML_TEMPLATE = '''
     }
 
     function copyResults() {
-        var text = document.getElementById('unifiedSummary').innerText;
+        var text = document.getElementById('overlaySummary').innerText;
         navigator.clipboard.writeText(text).then(function() { showModal('Copied!', 'Strategy copied to clipboard.'); });
     }
 
@@ -951,12 +1064,17 @@ HTML_TEMPLATE = '''
             return showModal('Error', 'Payment system not configured. Please contact support.');
         }
         
+        console.log('Starting payment...');
+        
         fetch('/api/create-order', { method: 'POST' })
         .then(function(res) { 
+            console.log('Order response status:', res.status);
             if (!res.ok) throw new Error('Failed to create order');
             return res.json(); 
         })
         .then(function(order) {
+            console.log('Order created:', order);
+            
             var options = {
                 key: rzpKeyId,
                 amount: order.amount,
@@ -965,24 +1083,47 @@ HTML_TEMPLATE = '''
                 description: 'Pro Subscription - Monthly',
                 order_id: order.order_id,
                 handler: function(response) {
+                    console.log('Payment handler response:', response);
+                    
+                    var paymentId = response.razorpay_payment_id;
+                    var orderId = response.razorpay_order_id;
+                    var signature = response.razorpay_signature;
+                    
+                    console.log('Payment ID:', paymentId);
+                    console.log('Order ID:', orderId);
+                    console.log('Signature:', signature);
+                    
+                    if (!paymentId || !orderId || !signature) {
+                        console.error('Missing payment data:', response);
+                        return showModal('Error', 'Payment completed but data is missing. Please contact support.');
+                    }
+                    
                     fetch('/api/verify-payment', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({
-                            razorpay_payment_id: response.razorpay_payment_id,
-                            razorpay_order_id: response.razorpay_order_id,
-                            razorpay_signature: response.razorpay_signature
+                            razorpay_payment_id: paymentId,
+                            razorpay_order_id: orderId,
+                            razorpay_signature: signature
                         })
                     })
-                    .then(function(res) { return res.json(); })
+                    .then(function(res) { 
+                        console.log('Verification response status:', res.status);
+                        return res.json(); 
+                    })
                     .then(function(data) {
+                        console.log('Verification result:', data);
                         if(data.status === 'success') {
                             isPro = true; generationsUsed = 0; followupsUsed = 0;
                             updateUserUI();
-                            showModal('Payment Successful!', 'Welcome to Winy AI Pro! You now have unlimited access.');
+                            showModal(' Welcome to Pro!', 'Payment successful! You now have unlimited access to all features including Deep Dive mode, unlimited generations, and priority support.');
                         } else { 
-                            showModal('Payment Failed', 'Verification failed.'); 
+                            showModal('Payment Failed', 'Verification failed. Please contact support with Payment ID: ' + paymentId); 
                         }
+                    })
+                    .catch(function(err) { 
+                        console.error('Verification error:', err);
+                        showModal('Error', 'Verification error. Please contact support.'); 
                     });
                 },
                 prefill: { name: currentUser ? currentUser.displayName || '' : '', email: currentUser ? currentUser.email : '', contact: '' },
@@ -990,11 +1131,15 @@ HTML_TEMPLATE = '''
             };
             var rzp = new Razorpay(options);
             rzp.on('payment.failed', function(response) {
+                console.error('Payment failed:', response);
                 showModal('Payment Failed', response.error.description);
             });
             rzp.open();
         })
-        .catch(function(e) { showModal('Error', 'Failed to start payment.'); });
+        .catch(function(e) { 
+            console.error('Payment error:', e);
+            showModal('Error', 'Failed to start payment.'); 
+        });
     }
 
     updateUserUI();
@@ -1139,7 +1284,10 @@ def verify_payment():
         payment_id = data.get('razorpay_payment_id', '')
         signature = data.get('razorpay_signature', '')
         
+        print(f"Verification attempt - Order: {order_id}, Payment: {payment_id}, Signature: {signature}")
+        
         if not all([order_id, payment_id, signature]):
+            print("Missing payment data")
             return jsonify({"status": "failure", "message": "Missing payment data"}), 400
         
         message = f"{order_id}|{payment_id}"
@@ -1149,14 +1297,20 @@ def verify_payment():
             hashlib.sha256
         ).hexdigest()
         
+        print(f"Expected: {expected_signature}")
+        print(f"Received: {signature}")
+        print(f"Match: {expected_signature == signature}")
+        
         if expected_signature == signature:
             session['is_pro'] = True
             session['generations_count'] = 0
             session['followups_count'] = 0
+            print("Payment verified successfully!")
             return jsonify({"status": "success"})
         
         return jsonify({"status": "failure", "message": "Signature mismatch"}), 400
     except Exception as e:
+        print(f"Verification error: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
