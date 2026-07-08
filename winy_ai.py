@@ -5,6 +5,7 @@ import os
 import razorpay
 import hmac
 import hashlib
+from datetime import datetime, date
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "winy-ai-secret-key-2024")
@@ -18,7 +19,11 @@ GROQ_HEADERS = {
 
 RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID")
 RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET")
-razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+
+if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
+    razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+else:
+    razorpay_client = None
 
 def clean_text(text):
     text = text.replace('**', '').replace('*', '').replace('_', '')
@@ -42,6 +47,24 @@ def call_llm(system_prompt, user_prompt, temperature=0.7):
         return "The swarm encountered a rate limit."
     except Exception as e:
         return f"Connection error: {str(e)}"
+
+def get_today():
+    return date.today().isoformat()
+
+def check_daily_limit(session_key_count, session_key_date, max_limit):
+    today = get_today()
+    stored_date = session.get(session_key_date)
+    current_count = session.get(session_key_count, 0)
+    
+    if stored_date != today:
+        session[session_key_date] = today
+        session[session_key_count] = 0
+        current_count = 0
+    
+    return current_count < max_limit, current_count
+
+def increment_usage(session_key_count):
+    session[session_key_count] = session.get(session_key_count, 0) + 1
 
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
@@ -170,7 +193,6 @@ HTML_TEMPLATE = '''
         .btn-icon:hover { border-color: var(--accent); background: rgba(0,0,0,0.05); }
         .btn-icon svg { width: 16px; height: 16px; stroke-width: 2; }
         
-        /* HORIZONTAL GLASS BOXES FOR RESULTS */
         .results-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -222,7 +244,6 @@ HTML_TEMPLATE = '''
         .cost-card.total { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
         .cost-card.total .cost-card-label { color: #aaa; }
         
-        /* FOLLOWUP QUESTION BOX */
         .followup-wrapper {
             margin-top: 40px;
             padding: 32px;
@@ -423,8 +444,8 @@ HTML_TEMPLATE = '''
 
 <script>
     var isPro = {{ session.get('is_pro', False) | tojson }};
-    var generationsUsed = {{ session.get('generations_used', 0) | tojson }};
-    var followupsUsed = {{ session.get('followups_used', 0) | tojson }};
+    var generationsUsed = {{ session.get('generations_count', 0) | tojson }};
+    var followupsUsed = {{ session.get('followups_count', 0) | tojson }};
     var rzpKeyId = {{ razorpay_key_id | tojson }};
 
     var currentContext = '';
@@ -447,7 +468,7 @@ HTML_TEMPLATE = '''
             document.getElementById('footerLimit').innerHTML = 'You are a <strong style="color:#000;">Pro</strong> user. Unlimited access enabled.';
         } else {
             var remaining = Math.max(0, 3 - generationsUsed);
-            document.getElementById('footerLimit').innerHTML = 'Free tier: <strong style="color:#000;">' + remaining + '</strong> generations remaining today. <span style="color:#000; cursor:pointer; text-decoration:underline; font-weight:600;" onclick="initiatePayment()">Upgrade to Pro</span> for unlimited.';
+            document.getElementById('footerLimit').innerHTML = 'Free tier: <strong style="color:#000;">' + remaining + '</strong> generations remaining today. Resets at midnight. <span style="color:#000; cursor:pointer; text-decoration:underline; font-weight:600;" onclick="initiatePayment()">Upgrade to Pro</span> for unlimited.';
         }
     }
 
@@ -496,10 +517,10 @@ HTML_TEMPLATE = '''
 
         var length = document.getElementById('optLength').value;
         if (length === 'long' && !isPro) {
-            return showModal('Pro Feature', 'Deep Dive mode is available only for Pro users.', 'Upgrade', true);
+            return showModal('Pro Feature', 'Deep Dive mode is available only for Pro users. Upgrade to unlock comprehensive 500-word analyses.', 'Upgrade', true);
         }
         if (!isPro && generationsUsed >= 3) {
-            return showModal('Daily Limit Reached', 'You have used all 3 free generations for today.', 'Upgrade', true);
+            return showModal('Daily Limit Reached', 'You have used all 3 free generations for today. Your limit resets at midnight.', 'Upgrade', true);
         }
 
         var industry = document.getElementById('optIndustry').value;
@@ -537,7 +558,7 @@ HTML_TEMPLATE = '''
         var q = document.getElementById('followupInput').value.trim();
         if (!q) return;
         if (!isPro && followupsUsed >= 1) {
-            return showModal('Pro Feature', 'Free users get 1 follow-up question.', 'Upgrade', true);
+            return showModal('Pro Feature', 'Free users get 1 follow-up question per day. Your limit resets at midnight.', 'Upgrade', true);
         }
         
         var btn = document.querySelector('.btn-send');
@@ -567,7 +588,7 @@ HTML_TEMPLATE = '''
         .then(function(data) {
             answerBox.innerHTML = '<p>' + highlightText(data.answer) + '</p>';
             document.getElementById('followupInput').value = '';
-            if (!isPro) followupsUsed++;
+            if (!isPro) { followupsUsed++; }
             btn.innerHTML = originalContent;
             btn.disabled = false;
         })
@@ -584,8 +605,17 @@ HTML_TEMPLATE = '''
     }
 
     function initiatePayment() {
+        if (!rzpKeyId) {
+            return showModal('Error', 'Payment system not configured. Please contact support.');
+        }
+        
         fetch('/api/create-order', { method: 'POST' })
-        .then(function(res) { return res.json(); })
+        .then(function(res) { 
+            if (!res.ok) {
+                throw new Error('Failed to create order: ' + res.status);
+            }
+            return res.json(); 
+        })
         .then(function(order) {
             var options = {
                 key: rzpKeyId,
@@ -603,15 +633,25 @@ HTML_TEMPLATE = '''
                             razorpay_order_id: response.razorpay_order_id,
                             razorpay_signature: response.razorpay_signature
                         })
-                    }).then(function(res) { return res.json(); })
+                    })
+                    .then(function(res) { 
+                        if (!res.ok) {
+                            return res.json().then(function(err) { throw new Error(err.message || 'Verification failed'); });
+                        }
+                        return res.json(); 
+                    })
                     .then(function(data) {
                         if(data.status === 'success') {
                             isPro = true; generationsUsed = 0; followupsUsed = 0;
                             updateUI();
-                            showModal('Payment Successful!', 'Welcome to Winy AI Pro!');
-                        } else { showModal('Payment Failed', 'Verification failed. Please contact support.'); }
+                            showModal('Payment Successful!', 'Welcome to Winy AI Pro! You now have unlimited access.');
+                        } else { 
+                            showModal('Payment Failed', 'Verification failed. Please contact support with payment ID: ' + response.razorpay_payment_id); 
+                        }
                     })
-                    .catch(function(err) { showModal('Error', 'Verification error: ' + err.message); });
+                    .catch(function(err) { 
+                        showModal('Error', 'Verification error: ' + err.message + '. Please contact support.'); 
+                    });
                 },
                 prefill: { name: '', email: '', contact: '' },
                 theme: { color: '#000000' }
@@ -622,7 +662,9 @@ HTML_TEMPLATE = '''
             });
             rzp.open();
         })
-        .catch(function(e) { showModal('Error', 'Failed to start payment.'); });
+        .catch(function(e) { 
+            showModal('Error', 'Failed to start payment: ' + e.message + '. Please refresh and try again.'); 
+        });
     }
 
     updateUI();
@@ -633,25 +675,47 @@ HTML_TEMPLATE = '''
 
 @app.route('/')
 def home():
-    if 'generations_used' not in session: session['generations_used'] = 0
-    if 'followups_used' not in session: session['followups_used'] = 0
-    if 'is_pro' not in session: session['is_pro'] = False
+    today = get_today()
+    
+    if 'is_pro' not in session:
+        session['is_pro'] = False
+    
+    if session.get('generations_date') != today:
+        session['generations_date'] = today
+        session['generations_count'] = 0
+    
+    if session.get('followups_date') != today:
+        session['followups_date'] = today
+        session['followups_count'] = 0
+    
     return render_template_string(HTML_TEMPLATE, razorpay_key_id=RAZORPAY_KEY_ID)
 
 @app.route('/generate', methods=['POST'])
 def generate():
-    if not session.get('is_pro') and session.get('generations_used', 0) >= 3:
-        return jsonify({"error": "Limit reached"}), 403
+    if session.get('is_pro'):
+        is_pro = True
+    else:
+        today = get_today()
+        if session.get('generations_date') != today:
+            session['generations_date'] = today
+            session['generations_count'] = 0
+        
+        if session.get('generations_count', 0) >= 3:
+            return jsonify({"error": "Daily limit reached. Resets at midnight."}), 403
+        is_pro = False
+
     data = request.json
-    prompt = data['prompt']
-    industry = data['industry']
-    length = data['length']
-    tone = data['tone']
-    if length == 'long' and not session.get('is_pro'):
-        return jsonify({"error": "Pro feature"}), 403
+    prompt = data.get('prompt', '')
+    industry = data.get('industry', 'General')
+    length = data.get('length', 'medium')
+    tone = data.get('tone', 'Professional')
+    
+    if length == 'long' and not is_pro:
+        return jsonify({"error": "Deep Dive is a Pro-only feature"}), 403
 
     word_map = {'short': '200 words', 'medium': '350 words', 'long': '500 words'}
     limit = word_map.get(length, '350 words')
+    
     sys = f"""Business consultant for {industry}. Tone: {tone}.
     Analyze: {prompt}
     
@@ -685,33 +749,64 @@ def generate():
                 try:
                     key, val = line.split(':', 1)
                     sections['costs'][key.strip()] = int(val.strip().replace(',', '').replace('$', ''))
-                except: pass
-            elif current_section: sections[current_section] += line + "\n"
+                except: 
+                    pass
+            elif current_section: 
+                sections[current_section] += line + "\n"
 
     if 'total' not in sections['costs']:
         sections['costs']['total'] = sum(v for k,v in sections['costs'].items() if isinstance(v, int))
     if not sections['costs'] or sections['costs'].get('total', 0) == 0:
         sections['costs'] = {'Product Dev': 5000, 'Marketing': 3000, 'Operations': 3000, 'Legal': 1500, 'Contingency': 1500, 'total': 14000}
 
-    if not session.get('is_pro'): session['generations_used'] = session.get('generations_used', 0) + 1
+    if not is_pro:
+        session['generations_count'] = session.get('generations_count', 0) + 1
+    
     return jsonify(sections)
 
 @app.route('/followup', methods=['POST'])
 def followup():
-    if not session.get('is_pro') and session.get('followups_used', 0) >= 1:
-        return jsonify({"error": "Limit reached"}), 403
+    if session.get('is_pro'):
+        is_pro = True
+    else:
+        today = get_today()
+        if session.get('followups_date') != today:
+            session['followups_date'] = today
+            session['followups_count'] = 0
+        
+        if session.get('followups_count', 0) >= 1:
+            return jsonify({"error": "Daily follow-up limit reached. Resets at midnight."}), 403
+        is_pro = False
+
     data = request.json
-    sys = f"Context: {data['industry']} business idea: '{data['context']}'. Answer concisely in 100-150 words: {data['question']}"
-    ans = call_llm(sys, data['question'])
-    if not session.get('is_pro'): session['followups_used'] = session.get('followups_used', 0) + 1
+    q = data.get('question', '')
+    ctx = data.get('context', '')
+    ind = data.get('industry', 'General')
+    
+    sys = f"Context: {ind} business idea: '{ctx}'. Answer concisely in 100-150 words: {q}"
+    ans = call_llm(sys, q)
+    
+    if not is_pro:
+        session['followups_count'] = session.get('followups_count', 0) + 1
+    
     return jsonify({"answer": ans})
 
 @app.route('/api/create-order', methods=['POST'])
 def create_order():
+    if not razorpay_client:
+        return jsonify({"error": "Payment system not configured"}), 500
+    
     try:
-        order = razorpay_client.order.create({"amount": 49900, "currency": "INR", "receipt": "rcpt_1", "payment_capture": 1})
+        order = razorpay_client.order.create({
+            "amount": 49900,
+            "currency": "INR",
+            "receipt": f"rcpt_{int(os.urandom(4).hex(), 16)}",
+            "payment_capture": 1
+        })
         return jsonify(order)
-    except Exception as e: return jsonify({"error": str(e)}), 500
+    except Exception as e:
+        print(f"Create order error: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/verify-payment', methods=['POST'])
 def verify_payment():
@@ -721,21 +816,31 @@ def verify_payment():
         payment_id = data.get('razorpay_payment_id', '')
         signature = data.get('razorpay_signature', '')
         
-        message = order_id + "|" + payment_id
+        if not all([order_id, payment_id, signature]):
+            return jsonify({"status": "failure", "message": "Missing payment data"}), 400
+        
+        message = f"{order_id}|{payment_id}"
         expected_signature = hmac.new(
             RAZORPAY_KEY_SECRET.encode(),
             message.encode(),
             hashlib.sha256
         ).hexdigest()
         
+        print(f"Verifying: order={order_id}, payment={payment_id}")
+        print(f"Expected: {expected_signature}")
+        print(f"Received: {signature}")
+        
         if expected_signature == signature:
             session['is_pro'] = True
-            session['generations_used'] = 0
-            session['followups_used'] = 0
+            session['generations_count'] = 0
+            session['followups_count'] = 0
+            session['generations_date'] = get_today()
+            session['followups_date'] = get_today()
             return jsonify({"status": "success"})
         
         return jsonify({"status": "failure", "message": "Signature mismatch"}), 400
     except Exception as e:
+        print(f"Verify payment error: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
