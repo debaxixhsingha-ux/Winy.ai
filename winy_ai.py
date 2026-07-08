@@ -51,21 +51,6 @@ def call_llm(system_prompt, user_prompt, temperature=0.7):
 def get_today():
     return date.today().isoformat()
 
-def check_daily_limit(session_key_count, session_key_date, max_limit):
-    today = get_today()
-    stored_date = session.get(session_key_date)
-    current_count = session.get(session_key_count, 0)
-    
-    if stored_date != today:
-        session[session_key_date] = today
-        session[session_key_count] = 0
-        current_count = 0
-    
-    return current_count < max_limit, current_count
-
-def increment_usage(session_key_count):
-    session[session_key_count] = session.get(session_key_count, 0) + 1
-
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html lang="en">
@@ -74,6 +59,8 @@ HTML_TEMPLATE = '''
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Winy AI | Enterprise Strategy Swarm</title>
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
     <style>
         :root {
             --bg: #ffffff;
@@ -123,6 +110,30 @@ HTML_TEMPLATE = '''
         }
         .btn-pro:hover { background: rgba(0, 0, 0, 0.1); border-color: rgba(0, 0, 0, 0.2); }
 
+        .btn-login {
+            background: var(--accent); color: var(--accent-text);
+            padding: 8px 16px; border-radius: 100px;
+            font-size: 12px; font-weight: 600; cursor: pointer; border: none;
+            transition: all 0.3s ease;
+        }
+        .btn-login:hover { opacity: 0.8; }
+
+        .user-info {
+            display: flex; align-items: center; gap: 12px;
+        }
+        .user-avatar {
+            width: 32px; height: 32px; border-radius: 50%;
+            background: var(--accent); color: var(--accent-text);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 14px; font-weight: 600;
+        }
+        .btn-logout {
+            background: transparent; border: 1px solid var(--glass-border);
+            color: var(--text-muted); padding: 6px 12px; border-radius: 100px;
+            font-size: 11px; cursor: pointer; transition: all 0.3s ease;
+        }
+        .btn-logout:hover { border-color: var(--accent); color: var(--text); }
+
         .container { max-width: 900px; margin: 0 auto; padding: 120px 24px 60px; position: relative; z-index: 1; }
         .hero { margin-bottom: 48px; text-align: center; }
         .hero h1 { font-size: 48px; line-height: 1.1; margin-bottom: 12px; letter-spacing: -1.5px; }
@@ -144,6 +155,7 @@ HTML_TEMPLATE = '''
         }
         .main-input:focus { background: rgba(0, 0, 0, 0.05); border-color: rgba(0, 0, 0, 0.2); }
         .main-input::placeholder { color: #999; }
+        .main-input:disabled { opacity: 0.5; cursor: not-allowed; }
 
         .options-slider { display: flex; gap: 16px; overflow-x: auto; padding-bottom: 20px; margin-bottom: 20px; scrollbar-width: none; }
         .options-slider::-webkit-scrollbar { display: none; }
@@ -154,6 +166,7 @@ HTML_TEMPLATE = '''
         .option-card:hover { border-color: rgba(0, 0, 0, 0.2); }
         .option-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); margin-bottom: 12px; display: block; }
         .option-select { width: 100%; background: transparent; border: none; color: var(--text); font-size: 14px; font-family: var(--font); outline: none; cursor: pointer; appearance: none; }
+        .option-select:disabled { opacity: 0.5; cursor: not-allowed; }
 
         .btn-launch {
             width: 100%; background: rgba(0, 0, 0, 0.05); backdrop-filter: blur(20px);
@@ -166,6 +179,7 @@ HTML_TEMPLATE = '''
             display: flex; align-items: center; justify-content: center; gap: 8px;
         }
         .btn-launch:hover { background: var(--accent); color: var(--accent-text); border-color: var(--accent); box-shadow: 0 15px 40px rgba(0, 0, 0, 0.2); transform: translateY(-2px); }
+        .btn-launch:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
         .swarm-loader { display: none; flex-direction: column; align-items: center; justify-content: center; padding: 80px 0; position: relative; height: 300px; }
         .swarm-loader.active { display: flex; }
@@ -267,6 +281,7 @@ HTML_TEMPLATE = '''
             margin-bottom: 12px;
         }
         .followup-input:focus { border-color: rgba(0,0,0,0.2); }
+        .followup-input:disabled { opacity: 0.5; cursor: not-allowed; }
         .btn-send {
             background: var(--accent); color: var(--accent-text); border: none;
             width: 100%; padding: 14px 24px; border-radius: 100px;
@@ -275,6 +290,7 @@ HTML_TEMPLATE = '''
             transition: transform 0.2s;
         }
         .btn-send:hover { transform: scale(1.02); }
+        .btn-send:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
         .btn-send svg { width: 18px; height: 18px; }
         
         .question-box {
@@ -323,10 +339,133 @@ HTML_TEMPLATE = '''
         .modal-btn:hover { opacity: 0.8; }
         .modal-btn.secondary { background: transparent; color: var(--text); border: 1px solid var(--glass-border); }
 
+        /* Login Modal Styles */
+        .login-modal { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,0.9); backdrop-filter: blur(20px); z-index: 2000; align-items: center; justify-content: center; }
+        .login-modal.active { display: flex; }
+        .login-card {
+            background: #fff;
+            border: 1px solid var(--glass-border);
+            border-radius: 32px;
+            padding: 48px;
+            max-width: 420px;
+            width: 90%;
+            box-shadow: 0 30px 60px rgba(0,0,0,0.1);
+        }
+        .login-card h2 {
+            font-size: 28px;
+            margin-bottom: 8px;
+            text-align: center;
+        }
+        .login-card .subtitle {
+            color: var(--text-muted);
+            text-align: center;
+            margin-bottom: 32px;
+            font-size: 14px;
+        }
+        .login-tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 24px;
+            background: rgba(0,0,0,0.03);
+            padding: 4px;
+            border-radius: 100px;
+        }
+        .login-tab {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            background: transparent;
+            border-radius: 100px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            color: var(--text-muted);
+        }
+        .login-tab.active {
+            background: var(--accent);
+            color: var(--accent-text);
+        }
+        .login-input {
+            width: 100%;
+            background: rgba(0,0,0,0.03);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            padding: 14px 16px;
+            font-size: 14px;
+            margin-bottom: 12px;
+            outline: none;
+            font-family: var(--font);
+        }
+        .login-input:focus {
+            border-color: rgba(0,0,0,0.2);
+        }
+        .login-btn {
+            width: 100%;
+            background: var(--accent);
+            color: var(--accent-text);
+            border: none;
+            padding: 14px;
+            border-radius: 100px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 8px;
+            transition: opacity 0.2s;
+        }
+        .login-btn:hover { opacity: 0.8; }
+        .login-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .divider {
+            display: flex;
+            align-items: center;
+            margin: 24px 0;
+            color: var(--text-muted);
+            font-size: 12px;
+        }
+        .divider::before, .divider::after {
+            content: '';
+            flex: 1;
+            border-bottom: 1px solid var(--glass-border);
+        }
+        .divider::before { margin-right: 12px; }
+        .divider::after { margin-left: 12px; }
+        .google-btn {
+            width: 100%;
+            background: #fff;
+            border: 1px solid var(--glass-border);
+            padding: 12px;
+            border-radius: 100px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            transition: all 0.3s;
+        }
+        .google-btn:hover {
+            background: rgba(0,0,0,0.02);
+            border-color: rgba(0,0,0,0.2);
+        }
+        .google-btn svg { width: 20px; height: 20px; }
+        .login-error {
+            background: #fee;
+            border: 1px solid #fcc;
+            color: #c00;
+            padding: 12px;
+            border-radius: 12px;
+            font-size: 13px;
+            margin-bottom: 16px;
+            display: none;
+        }
+        .login-error.active { display: block; }
+
         @media (max-width: 768px) {
             .hero h1 { font-size: 36px; } .container { padding: 100px 20px 40px; }
             .glass-card { padding: 24px; border-radius: 24px; } nav { width: 95%; padding: 12px 20px; }
             .results-grid { grid-template-columns: 1fr; }
+            .login-card { padding: 32px; }
         }
     </style>
 </head>
@@ -338,7 +477,9 @@ HTML_TEMPLATE = '''
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
         Winy AI
     </div>
-    <button class="btn-pro" onclick="initiatePayment()">Upgrade to Pro</button>
+    <div id="navButtons">
+        <button class="btn-login" onclick="showLoginModal()">Login / Sign Up</button>
+    </div>
 </nav>
 
 <div class="container">
@@ -349,11 +490,11 @@ HTML_TEMPLATE = '''
 
     <div id="inputWrapper">
         <div class="glass-card">
-            <textarea class="main-input" id="mainPrompt" placeholder="Describe your business idea, challenge, or market..."></textarea>
+            <textarea class="main-input" id="mainPrompt" placeholder="Describe your business idea, challenge, or market..." disabled></textarea>
             <div class="options-slider">
                 <div class="option-card">
                     <span class="option-label">Industry</span>
-                    <select class="option-select" id="optIndustry">
+                    <select class="option-select" id="optIndustry" disabled>
                         <option value="General">General</option><option value="Technology">Technology / SaaS</option>
                         <option value="E-commerce">E-commerce / Retail</option><option value="Food & Beverage">Food & Beverage</option>
                         <option value="Real Estate">Real Estate</option><option value="Healthcare">Healthcare</option>
@@ -361,22 +502,22 @@ HTML_TEMPLATE = '''
                 </div>
                 <div class="option-card">
                     <span class="option-label">Depth</span>
-                    <select class="option-select" id="optLength">
+                    <select class="option-select" id="optLength" disabled>
                         <option value="short">Brief (Quick Scan)</option><option value="medium" selected>Standard (Detailed)</option>
                         <option value="long">Deep Dive (Comprehensive)</option>
                     </select>
                 </div>
                 <div class="option-card">
                     <span class="option-label">Tone</span>
-                    <select class="option-select" id="optTone">
+                    <select class="option-select" id="optTone" disabled>
                         <option value="Professional">Professional</option><option value="Direct">Direct & Actionable</option>
                         <option value="Analytical">Analytical</option><option value="Persuasive">Persuasive (Pitch Deck)</option>
                     </select>
                 </div>
             </div>
-            <button class="btn-launch" id="btnLaunch" onclick="runSwarm()">
+            <button class="btn-launch" id="btnLaunch" onclick="runSwarm()" disabled>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px;"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-                Initialize Swarm
+                Login to Initialize Swarm
             </button>
         </div>
     </div>
@@ -427,7 +568,41 @@ HTML_TEMPLATE = '''
     </div>
 
     <div class="footer-limit" id="footerLimit">
-        You're currently on free tier. <span style="color:#000; cursor:pointer; text-decoration:underline; font-weight:600;" onclick="initiatePayment()">Upgrade to Pro</span> for unlimited access.
+        Please login to access features.
+    </div>
+</div>
+
+<!-- Login Modal -->
+<div class="login-modal" id="loginModal">
+    <div class="login-card">
+        <h2>Welcome to Winy AI</h2>
+        <p class="subtitle">Login to deploy the swarm</p>
+        
+        <div class="login-tabs">
+            <button class="login-tab active" onclick="switchTab('login')">Login</button>
+            <button class="login-tab" onclick="switchTab('signup')">Sign Up</button>
+        </div>
+        
+        <div class="login-error" id="loginError"></div>
+        
+        <div id="loginForm">
+            <input type="email" class="login-input" id="loginEmail" placeholder="Email">
+            <input type="password" class="login-input" id="loginPassword" placeholder="Password">
+            <button class="login-btn" onclick="loginWithEmail()">Login</button>
+        </div>
+        
+        <div id="signupForm" style="display:none;">
+            <input type="email" class="login-input" id="signupEmail" placeholder="Email">
+            <input type="password" class="login-input" id="signupPassword" placeholder="Password (min 6 characters)">
+            <button class="login-btn" onclick="signupWithEmail()">Sign Up</button>
+        </div>
+        
+        <div class="divider">or</div>
+        
+        <button class="google-btn" onclick="loginWithGoogle()">
+            <svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+            Continue with Google
+        </button>
     </div>
 </div>
 
@@ -443,13 +618,174 @@ HTML_TEMPLATE = '''
 </div>
 
 <script>
+    // Firebase Configuration
+    const firebaseConfig = {
+        apiKey: "AIzaSyBUmnO-o2UaVKuaPqHBdLwm03dcfpOWzDU",
+        authDomain: "winy-3984d.firebaseapp.com",
+        projectId: "winy-3984d",
+        storageBucket: "winy-3984d.firebasestorage.app",
+        messagingSenderId: "126237613814",
+        appId: "1:126237613814:web:e3cb88222d920545a416d7"
+    };
+    
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    
     var isPro = {{ session.get('is_pro', False) | tojson }};
     var generationsUsed = {{ session.get('generations_count', 0) | tojson }};
     var followupsUsed = {{ session.get('followups_count', 0) | tojson }};
     var rzpKeyId = {{ razorpay_key_id | tojson }};
+    var isLoggedIn = false;
+    var currentUser = null;
 
     var currentContext = '';
     var currentIndustry = '';
+
+    // Listen to auth state changes
+    auth.onAuthStateChanged(function(user) {
+        if (user) {
+            isLoggedIn = true;
+            currentUser = user;
+            enableFeatures();
+            updateUserUI();
+        } else {
+            isLoggedIn = false;
+            currentUser = null;
+            disableFeatures();
+            updateUserUI();
+        }
+    });
+
+    function enableFeatures() {
+        document.getElementById('mainPrompt').disabled = false;
+        document.getElementById('optIndustry').disabled = false;
+        document.getElementById('optLength').disabled = false;
+        document.getElementById('optTone').disabled = false;
+        document.getElementById('btnLaunch').disabled = false;
+        document.getElementById('btnLaunch').innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px;"><path d="M5 12h14M12 5l7 7-7 7"/></svg> Initialize Swarm';
+    }
+
+    function disableFeatures() {
+        document.getElementById('mainPrompt').disabled = true;
+        document.getElementById('optIndustry').disabled = true;
+        document.getElementById('optLength').disabled = true;
+        document.getElementById('optTone').disabled = true;
+        document.getElementById('btnLaunch').disabled = true;
+        document.getElementById('btnLaunch').innerHTML = 'Login to Initialize Swarm';
+    }
+
+    function updateUserUI() {
+        var navButtons = document.getElementById('navButtons');
+        var footer = document.getElementById('footerLimit');
+        
+        if (isLoggedIn) {
+            var userInitial = currentUser.email.charAt(0).toUpperCase();
+            navButtons.innerHTML = '<div class="user-info"><div class="user-avatar">' + userInitial + '</div><button class="btn-logout" onclick="logout()">Logout</button>' + (isPro ? '' : '<button class="btn-pro" onclick="initiatePayment()">Upgrade to Pro</button>') + '</div>';
+            
+            if (isPro) {
+                footer.innerHTML = 'You are a <strong style="color:#000;">Pro</strong> user. Unlimited access enabled.';
+            } else {
+                var remaining = Math.max(0, 3 - generationsUsed);
+                footer.innerHTML = 'Free tier: <strong style="color:#000;">' + remaining + '</strong> generations remaining today. Resets at midnight. <span style="color:#000; cursor:pointer; text-decoration:underline; font-weight:600;" onclick="initiatePayment()">Upgrade to Pro</span> for unlimited.';
+            }
+        } else {
+            navButtons.innerHTML = '<button class="btn-login" onclick="showLoginModal()">Login / Sign Up</button>';
+            footer.innerHTML = 'Please login to access features.';
+        }
+    }
+
+    function showLoginModal() {
+        document.getElementById('loginModal').classList.add('active');
+        document.getElementById('loginError').classList.remove('active');
+    }
+
+    function hideLoginModal() {
+        document.getElementById('loginModal').classList.remove('active');
+    }
+
+    function switchTab(tab) {
+        var tabs = document.querySelectorAll('.login-tab');
+        tabs.forEach(function(t) { t.classList.remove('active'); });
+        
+        if (tab === 'login') {
+            tabs[0].classList.add('active');
+            document.getElementById('loginForm').style.display = 'block';
+            document.getElementById('signupForm').style.display = 'none';
+        } else {
+            tabs[1].classList.add('active');
+            document.getElementById('loginForm').style.display = 'none';
+            document.getElementById('signupForm').style.display = 'block';
+        }
+        document.getElementById('loginError').classList.remove('active');
+    }
+
+    function showError(msg) {
+        var errorDiv = document.getElementById('loginError');
+        errorDiv.textContent = msg;
+        errorDiv.classList.add('active');
+    }
+
+    function loginWithEmail() {
+        var email = document.getElementById('loginEmail').value.trim();
+        var password = document.getElementById('loginPassword').value;
+        
+        if (!email || !password) {
+            showError('Please enter email and password');
+            return;
+        }
+        
+        auth.signInWithEmailAndPassword(email, password)
+            .then(function() {
+                hideLoginModal();
+            })
+            .catch(function(error) {
+                showError(error.message);
+            });
+    }
+
+    function signupWithEmail() {
+        var email = document.getElementById('signupEmail').value.trim();
+        var password = document.getElementById('signupPassword').value;
+        
+        if (!email || !password) {
+            showError('Please enter email and password');
+            return;
+        }
+        
+        if (password.length < 6) {
+            showError('Password must be at least 6 characters');
+            return;
+        }
+        
+        auth.createUserWithEmailAndPassword(email, password)
+            .then(function() {
+                hideLoginModal();
+            })
+            .catch(function(error) {
+                showError(error.message);
+            });
+    }
+
+    function loginWithGoogle() {
+        var provider = new firebase.auth.GoogleAuthProvider();
+        auth.signInWithPopup(provider)
+            .then(function() {
+                hideLoginModal();
+            })
+            .catch(function(error) {
+                showError(error.message);
+            });
+    }
+
+    function logout() {
+        auth.signOut().then(function() {
+            isPro = false;
+            generationsUsed = 0;
+            followupsUsed = 0;
+            document.getElementById('resultsArea').classList.remove('active');
+            document.getElementById('inputWrapper').style.display = 'block';
+        });
+    }
 
     function showModal(title, message, confirmText, showCancel) {
         document.getElementById('modalTitle').textContent = title;
@@ -461,15 +797,6 @@ HTML_TEMPLATE = '''
 
     function closeModal() {
         document.getElementById('customModal').classList.remove('active');
-    }
-
-    function updateUI() {
-        if (isPro) {
-            document.getElementById('footerLimit').innerHTML = 'You are a <strong style="color:#000;">Pro</strong> user. Unlimited access enabled.';
-        } else {
-            var remaining = Math.max(0, 3 - generationsUsed);
-            document.getElementById('footerLimit').innerHTML = 'Free tier: <strong style="color:#000;">' + remaining + '</strong> generations remaining today. Resets at midnight. <span style="color:#000; cursor:pointer; text-decoration:underline; font-weight:600;" onclick="initiatePayment()">Upgrade to Pro</span> for unlimited.';
-        }
     }
 
     function highlightText(text) {
@@ -512,6 +839,11 @@ HTML_TEMPLATE = '''
     }
 
     function runSwarm() {
+        if (!isLoggedIn) {
+            showLoginModal();
+            return;
+        }
+        
         var prompt = document.getElementById('mainPrompt').value.trim();
         if (!prompt) return showModal('Missing Input', 'Please enter a business idea to analyze.');
 
@@ -543,7 +875,7 @@ HTML_TEMPLATE = '''
             document.getElementById('swarmLoader').classList.remove('active');
             document.getElementById('inputWrapper').style.display = 'block';
             document.getElementById('resultsArea').classList.add('active');
-            if (!isPro) { generationsUsed++; updateUI(); }
+            if (!isPro) { generationsUsed++; updateUserUI(); }
             renderResults(data);
             window.scrollTo({ top: document.getElementById('resultsArea').offsetTop - 100, behavior: 'smooth' });
         })
@@ -555,6 +887,11 @@ HTML_TEMPLATE = '''
     }
 
     function askFollowup() {
+        if (!isLoggedIn) {
+            showLoginModal();
+            return;
+        }
+        
         var q = document.getElementById('followupInput').value.trim();
         if (!q) return;
         if (!isPro && followupsUsed >= 1) {
@@ -605,15 +942,18 @@ HTML_TEMPLATE = '''
     }
 
     function initiatePayment() {
+        if (!isLoggedIn) {
+            showLoginModal();
+            return;
+        }
+        
         if (!rzpKeyId) {
             return showModal('Error', 'Payment system not configured. Please contact support.');
         }
         
         fetch('/api/create-order', { method: 'POST' })
         .then(function(res) { 
-            if (!res.ok) {
-                throw new Error('Failed to create order: ' + res.status);
-            }
+            if (!res.ok) throw new Error('Failed to create order');
             return res.json(); 
         })
         .then(function(order) {
@@ -634,26 +974,18 @@ HTML_TEMPLATE = '''
                             razorpay_signature: response.razorpay_signature
                         })
                     })
-                    .then(function(res) { 
-                        if (!res.ok) {
-                            return res.json().then(function(err) { throw new Error(err.message || 'Verification failed'); });
-                        }
-                        return res.json(); 
-                    })
+                    .then(function(res) { return res.json(); })
                     .then(function(data) {
                         if(data.status === 'success') {
                             isPro = true; generationsUsed = 0; followupsUsed = 0;
-                            updateUI();
+                            updateUserUI();
                             showModal('Payment Successful!', 'Welcome to Winy AI Pro! You now have unlimited access.');
                         } else { 
-                            showModal('Payment Failed', 'Verification failed. Please contact support with payment ID: ' + response.razorpay_payment_id); 
+                            showModal('Payment Failed', 'Verification failed.'); 
                         }
-                    })
-                    .catch(function(err) { 
-                        showModal('Error', 'Verification error: ' + err.message + '. Please contact support.'); 
                     });
                 },
-                prefill: { name: '', email: '', contact: '' },
+                prefill: { name: currentUser ? currentUser.displayName || '' : '', email: currentUser ? currentUser.email : '', contact: '' },
                 theme: { color: '#000000' }
             };
             var rzp = new Razorpay(options);
@@ -662,12 +994,10 @@ HTML_TEMPLATE = '''
             });
             rzp.open();
         })
-        .catch(function(e) { 
-            showModal('Error', 'Failed to start payment: ' + e.message + '. Please refresh and try again.'); 
-        });
+        .catch(function(e) { showModal('Error', 'Failed to start payment.'); });
     }
 
-    updateUI();
+    updateUserUI();
 </script>
 </body>
 </html>
@@ -701,7 +1031,7 @@ def generate():
             session['generations_count'] = 0
         
         if session.get('generations_count', 0) >= 3:
-            return jsonify({"error": "Daily limit reached. Resets at midnight."}), 403
+            return jsonify({"error": "Daily limit reached"}), 403
         is_pro = False
 
     data = request.json
@@ -749,10 +1079,8 @@ def generate():
                 try:
                     key, val = line.split(':', 1)
                     sections['costs'][key.strip()] = int(val.strip().replace(',', '').replace('$', ''))
-                except: 
-                    pass
-            elif current_section: 
-                sections[current_section] += line + "\n"
+                except: pass
+            elif current_section: sections[current_section] += line + "\n"
 
     if 'total' not in sections['costs']:
         sections['costs']['total'] = sum(v for k,v in sections['costs'].items() if isinstance(v, int))
@@ -775,16 +1103,12 @@ def followup():
             session['followups_count'] = 0
         
         if session.get('followups_count', 0) >= 1:
-            return jsonify({"error": "Daily follow-up limit reached. Resets at midnight."}), 403
+            return jsonify({"error": "Daily follow-up limit reached"}), 403
         is_pro = False
 
     data = request.json
-    q = data.get('question', '')
-    ctx = data.get('context', '')
-    ind = data.get('industry', 'General')
-    
-    sys = f"Context: {ind} business idea: '{ctx}'. Answer concisely in 100-150 words: {q}"
-    ans = call_llm(sys, q)
+    sys = f"Context: {data['industry']} business idea: '{data['context']}'. Answer concisely: {data['question']}"
+    ans = call_llm(sys, data['question'])
     
     if not is_pro:
         session['followups_count'] = session.get('followups_count', 0) + 1
@@ -805,7 +1129,6 @@ def create_order():
         })
         return jsonify(order)
     except Exception as e:
-        print(f"Create order error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/verify-payment', methods=['POST'])
@@ -826,21 +1149,14 @@ def verify_payment():
             hashlib.sha256
         ).hexdigest()
         
-        print(f"Verifying: order={order_id}, payment={payment_id}")
-        print(f"Expected: {expected_signature}")
-        print(f"Received: {signature}")
-        
         if expected_signature == signature:
             session['is_pro'] = True
             session['generations_count'] = 0
             session['followups_count'] = 0
-            session['generations_date'] = get_today()
-            session['followups_date'] = get_today()
             return jsonify({"status": "success"})
         
         return jsonify({"status": "failure", "message": "Signature mismatch"}), 400
     except Exception as e:
-        print(f"Verify payment error: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
