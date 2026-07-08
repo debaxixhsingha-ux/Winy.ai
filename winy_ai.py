@@ -3,13 +3,9 @@ import requests
 import re
 import json
 import os
+import razorpay
 import hmac
 import hashlib
-import razorpay
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
 
 app = Flask(__name__)
 
@@ -616,22 +612,11 @@ HTML_TEMPLATE = '''
         navigator.clipboard.writeText(text).then(() => alert('Copied to clipboard.'));
     }
 
-    // Razorpay Payment Integration
     async function initiatePayment() {
         try {
-            // Step 1: Create order on backend
-            const orderResponse = await fetch('/api/create-order', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' }
-            });
+            const orderRes = await fetch('/api/create-order', { method: 'POST' });
+            const order = await orderRes.json();
             
-            if (!orderResponse.ok) {
-                throw new Error('Failed to create order');
-            }
-            
-            const order = await orderResponse.json();
-            
-            // Step 2: Open Razorpay checkout
             const options = {
                 key: "{{ razorpay_key_id }}",
                 amount: order.amount,
@@ -639,31 +624,22 @@ HTML_TEMPLATE = '''
                 name: 'Winy AI',
                 description: 'Pro Subscription - Monthly',
                 order_id: order.order_id,
-                handler: async function(response) {
-                    // Step 3: Verify payment on backend
-                    try {
-                        const verifyResponse = await fetch('/api/verify-payment', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                razorpay_order_id: response.razorpay_order_id,
-                                razorpay_payment_id: response.razorpay_payment_id,
-                                razorpay_signature: response.razorpay_signature
-                            })
-                        });
-                        
-                        const result = await verifyResponse.json();
-                        
-                        if (result.status === 'success') {
+                handler: function(response) {
+                    fetch('/api/verify-payment', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            razorpay_order_id: response.razorpay_order_id,
+                            razorpay_payment_id: response.razorpay_payment_id,
+                            razorpay_signature: response.razorpay_signature
+                        })
+                    }).then(res => res.json()).then(data => {
+                        if(data.status === 'success') {
                             alert('Payment successful! You are now a Pro user.');
-                            // TODO: Update UI to show Pro features
-                            // Enable Deep Dive option, remove limits, etc.
                         } else {
-                            alert('Payment verification failed. Please contact support.');
+                            alert('Payment verification failed!');
                         }
-                    } catch (error) {
-                        alert('Payment verification error: ' + error.message);
-                    }
+                    });
                 },
                 prefill: {
                     name: '',
@@ -673,6 +649,12 @@ HTML_TEMPLATE = '''
                 theme: {
                     color: '#000000'
                 },
+                method: {
+                    upi: true,
+                    card: true,
+                    netbanking: true,
+                    wallet: true
+                },
                 modal: {
                     ondismiss: function() {
                         console.log('Checkout closed');
@@ -681,13 +663,14 @@ HTML_TEMPLATE = '''
             };
             
             const rzp = new Razorpay(options);
+            
             rzp.on('payment.failed', function(response) {
                 alert('Payment failed: ' + response.error.description);
             });
             
             rzp.open();
-        } catch (error) {
-            alert('Error initiating payment: ' + error.message);
+        } catch (e) {
+            alert('Error: ' + e.message);
         }
     }
 </script>
@@ -800,18 +783,13 @@ def followup():
 @app.route('/api/create-order', methods=['POST'])
 def create_order():
     try:
-        # Amount in paise (₹499 = 49900 paise)
-        amount = 49900  # ₹499 per month
+        amount = 49900  # ₹499 in paise
         
-        if amount < 100:
-            return jsonify({"error": "Amount must be at least 100 paise"}), 400
-        
-        # Create order using Razorpay SDK
         order = razorpay_client.order.create({
             "amount": amount,
             "currency": "INR",
             "receipt": f"receipt_{int(os.urandom(4).hex(), 16)}",
-            "payment_capture": 1  # Auto-capture payment
+            "payment_capture": 1
         })
         
         return jsonify({
@@ -826,25 +804,21 @@ def create_order():
 def verify_payment():
     try:
         data = request.json
-        razorpay_order_id = data.get('razorpay_order_id')
-        razorpay_payment_id = data.get('razorpay_payment_id')
-        razorpay_signature = data.get('razorpay_signature')
+        order_id = data.get('razorpay_order_id')
+        payment_id = data.get('razorpay_payment_id')
+        signature = data.get('razorpay_signature')
         
-        if not all([razorpay_order_id, razorpay_payment_id, razorpay_signature]):
-            return jsonify({"error": "Missing required fields"}), 400
-        
-        # Verify signature
-        message = f"{razorpay_order_id}|{razorpay_payment_id}"
+        message = f"{order_id}|{payment_id}"
         expected_signature = hmac.new(
             RAZORPAY_KEY_SECRET.encode(),
             message.encode(),
             hashlib.sha256
         ).hexdigest()
         
-        if expected_signature == razorpay_signature:
-            return jsonify({"status": "success", "message": "Payment verified"})
+        if expected_signature == signature:
+            return jsonify({"status": "success"})
         else:
-            return jsonify({"status": "failure", "message": "Signature mismatch"}), 400
+            return jsonify({"status": "failure"}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
