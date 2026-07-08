@@ -3,17 +3,28 @@ import requests
 import re
 import json
 import os
+import hmac
+import hashlib
+import razorpay
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 app = Flask(__name__)
 
-# API Key from environment variable (secure!)
+# Groq API Configuration
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_HEADERS = {
     "Authorization": f"Bearer {GROQ_API_KEY}",
     "Content-Type": "application/json"
 }
+
+# Razorpay Configuration
+RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID")
+RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET")
+razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 
 def clean_text(text):
     text = text.replace('**', '').replace('*', '').replace('_', '')
@@ -46,6 +57,7 @@ HTML_TEMPLATE = '''
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Winy AI | Enterprise Strategy Swarm</title>
+    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
     <style>
         :root {
             --bg: #000000;
@@ -385,7 +397,7 @@ HTML_TEMPLATE = '''
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
         Winy AI
     </div>
-    <button class="btn-pro" onclick="alert('Pro features are coming soon! We are building something amazing.')">Upgrade to Pro</button>
+    <button class="btn-pro" onclick="initiatePayment()">Upgrade to Pro</button>
 </nav>
 
 <div class="container">
@@ -471,7 +483,7 @@ HTML_TEMPLATE = '''
     </div>
 
     <div class="footer-limit">
-        You're currently on free tier. <span style="color:#fff; cursor:pointer; text-decoration:underline;" onclick="alert('Pro features coming soon!')">Upgrade to Pro</span>.
+        You're currently on free tier. <span style="color:#fff; cursor:pointer; text-decoration:underline;" onclick="initiatePayment()">Upgrade to Pro</span>.
     </div>
 </div>
 
@@ -603,6 +615,81 @@ HTML_TEMPLATE = '''
                      Array.from(document.querySelectorAll('.accordion-text')).map(e => e.innerText).join('\\n\\n');
         navigator.clipboard.writeText(text).then(() => alert('Copied to clipboard.'));
     }
+
+    // Razorpay Payment Integration
+    async function initiatePayment() {
+        try {
+            // Step 1: Create order on backend
+            const orderResponse = await fetch('/api/create-order', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            
+            if (!orderResponse.ok) {
+                throw new Error('Failed to create order');
+            }
+            
+            const order = await orderResponse.json();
+            
+            // Step 2: Open Razorpay checkout
+            const options = {
+                key: "{{ razorpay_key_id }}",
+                amount: order.amount,
+                currency: order.currency,
+                name: 'Winy AI',
+                description: 'Pro Subscription - Monthly',
+                order_id: order.order_id,
+                handler: async function(response) {
+                    // Step 3: Verify payment on backend
+                    try {
+                        const verifyResponse = await fetch('/api/verify-payment', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                razorpay_order_id: response.razorpay_order_id,
+                                razorpay_payment_id: response.razorpay_payment_id,
+                                razorpay_signature: response.razorpay_signature
+                            })
+                        });
+                        
+                        const result = await verifyResponse.json();
+                        
+                        if (result.status === 'success') {
+                            alert('Payment successful! You are now a Pro user.');
+                            // TODO: Update UI to show Pro features
+                            // Enable Deep Dive option, remove limits, etc.
+                        } else {
+                            alert('Payment verification failed. Please contact support.');
+                        }
+                    } catch (error) {
+                        alert('Payment verification error: ' + error.message);
+                    }
+                },
+                prefill: {
+                    name: '',
+                    email: '',
+                    contact: ''
+                },
+                theme: {
+                    color: '#000000'
+                },
+                modal: {
+                    ondismiss: function() {
+                        console.log('Checkout closed');
+                    }
+                }
+            };
+            
+            const rzp = new Razorpay(options);
+            rzp.on('payment.failed', function(response) {
+                alert('Payment failed: ' + response.error.description);
+            });
+            
+            rzp.open();
+        } catch (error) {
+            alert('Error initiating payment: ' + error.message);
+        }
+    }
 </script>
 <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
 </body>
@@ -611,7 +698,7 @@ HTML_TEMPLATE = '''
 
 @app.route('/')
 def home():
-    return render_template_string(HTML_TEMPLATE)
+    return render_template_string(HTML_TEMPLATE, razorpay_key_id=RAZORPAY_KEY_ID)
 
 @app.route('/generate', methods=['POST'])
 def generate():
@@ -709,6 +796,57 @@ def followup():
     ans = call_llm(sys, f"Question: {q}", temperature=0.7)
 
     return jsonify({"answer": ans})
+
+@app.route('/api/create-order', methods=['POST'])
+def create_order():
+    try:
+        # Amount in paise (₹499 = 49900 paise)
+        amount = 49900  # ₹499 per month
+        
+        if amount < 100:
+            return jsonify({"error": "Amount must be at least 100 paise"}), 400
+        
+        # Create order using Razorpay SDK
+        order = razorpay_client.order.create({
+            "amount": amount,
+            "currency": "INR",
+            "receipt": f"receipt_{int(os.urandom(4).hex(), 16)}",
+            "payment_capture": 1  # Auto-capture payment
+        })
+        
+        return jsonify({
+            "order_id": order["id"],
+            "amount": order["amount"],
+            "currency": order["currency"]
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/verify-payment', methods=['POST'])
+def verify_payment():
+    try:
+        data = request.json
+        razorpay_order_id = data.get('razorpay_order_id')
+        razorpay_payment_id = data.get('razorpay_payment_id')
+        razorpay_signature = data.get('razorpay_signature')
+        
+        if not all([razorpay_order_id, razorpay_payment_id, razorpay_signature]):
+            return jsonify({"error": "Missing required fields"}), 400
+        
+        # Verify signature
+        message = f"{razorpay_order_id}|{razorpay_payment_id}"
+        expected_signature = hmac.new(
+            RAZORPAY_KEY_SECRET.encode(),
+            message.encode(),
+            hashlib.sha256
+        ).hexdigest()
+        
+        if expected_signature == razorpay_signature:
+            return jsonify({"status": "success", "message": "Payment verified"})
+        else:
+            return jsonify({"status": "failure", "message": "Signature mismatch"}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     print("\n[WINY AI] Swarm Online. Port 5000.\n")
