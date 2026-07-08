@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template_string, session
 import requests
 import re
 import json
@@ -6,8 +6,10 @@ import os
 import razorpay
 import hmac
 import hashlib
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "winy-ai-secret-key-2024")
 
 # Groq API Configuration
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
@@ -58,6 +60,7 @@ HTML_TEMPLATE = '''
         :root {
             --bg: #000000;
             --surface: #0a0a0a;
+            --surface-hover: #111111;
             --border: #1a1a1a;
             --border-hover: #333333;
             --text: #ffffff;
@@ -88,7 +91,7 @@ HTML_TEMPLATE = '''
             border-bottom: 1px solid var(--border);
             position: sticky;
             top: 0;
-            background: rgba(0,0,0,0.8);
+            background: rgba(0,0,0,0.95);
             backdrop-filter: blur(12px);
             z-index: 100;
         }
@@ -117,20 +120,20 @@ HTML_TEMPLATE = '''
         .input-wrapper { margin-bottom: 40px; }
         .main-input {
             width: 100%;
-            background: transparent;
-            border: none;
-            border-bottom: 1px solid var(--border);
+            background: var(--surface);
+            border: 1px solid var(--border);
             color: var(--text);
-            font-size: 20px;
+            font-size: 16px;
             font-family: var(--font);
-            padding: 20px 0;
+            padding: 16px;
+            border-radius: 8px;
             resize: none;
             outline: none;
             transition: border-color 0.3s;
             min-height: 80px;
         }
-        .main-input:focus { border-bottom-color: var(--accent); }
-        .main-input::placeholder { color: #333; }
+        .main-input:focus { border-color: var(--accent); }
+        .main-input::placeholder { color: #555; }
 
         .options-slider {
             display: flex;
@@ -144,7 +147,7 @@ HTML_TEMPLATE = '''
 
         .option-card {
             flex: 0 0 auto;
-            min-width: 200px;
+            min-width: 180px;
             background: var(--surface);
             border: 1px solid var(--border);
             border-radius: 8px;
@@ -187,6 +190,8 @@ HTML_TEMPLATE = '''
             display: flex;
             align-items: center;
             gap: 8px;
+            width: 100%;
+            justify-content: center;
         }
         .btn-launch:hover { transform: translateY(-2px); opacity: 0.9; }
         .btn-launch:disabled { opacity: 0.3; cursor: not-allowed; transform: none; }
@@ -378,6 +383,58 @@ HTML_TEMPLATE = '''
         .hl-purple { color: #c084fc; border-bottom: 1px solid #c084fc; }
         .hl-yellow { color: #facc15; border-bottom: 1px solid #facc15; }
 
+        /* Custom Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.8);
+            backdrop-filter: blur(8px);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 32px;
+            max-width: 400px;
+            width: 90%;
+            text-align: center;
+        }
+        .modal h3 { font-size: 20px; margin-bottom: 16px; }
+        .modal p { color: var(--text-muted); margin-bottom: 24px; line-height: 1.6; }
+        .modal-btn {
+            background: var(--accent);
+            color: var(--accent-text);
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            margin: 0 8px;
+        }
+        .modal-btn.secondary {
+            background: transparent;
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+
+        .pro-badge {
+            display: inline-block;
+            background: var(--accent);
+            color: var(--accent-text);
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-left: 8px;
+        }
+
         @media (max-width: 768px) {
             .hero h1 { font-size: 32px; }
             .container { padding: 40px 20px; }
@@ -423,7 +480,7 @@ HTML_TEMPLATE = '''
                 <select class="option-select" id="optLength">
                     <option value="short">Brief (Quick Scan)</option>
                     <option value="medium" selected>Standard (Detailed)</option>
-                    <option value="long" disabled>Deep Dive (Comprehensive)</option>
+                    <option value="long">Deep Dive (Comprehensive) <span class="pro-badge">PRO</span></option>
                 </select>
             </div>
             <div class="option-card">
@@ -455,6 +512,9 @@ HTML_TEMPLATE = '''
                 <button class="btn-icon" onclick="copyResults()" title="Copy Text">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                 </button>
+                <button class="btn-icon" onclick="exportPDF()" title="Export PDF" id="btnExport" style="display:none;">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                </button>
                 <button class="btn-icon" onclick="runSwarm()" title="Regenerate">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path></svg>
                 </button>
@@ -478,14 +538,53 @@ HTML_TEMPLATE = '''
         </div>
     </div>
 
-    <div class="footer-limit">
-        You're currently on free tier. <span style="color:#fff; cursor:pointer; text-decoration:underline;" onclick="initiatePayment()">Upgrade to Pro</span>.
+    <div class="footer-limit" id="footerLimit">
+        You're currently on free tier. <span style="color:#fff; cursor:pointer; text-decoration:underline;" onclick="initiatePayment()">Upgrade to Pro</span> for unlimited access.
+    </div>
+</div>
+
+<!-- Custom Modal -->
+<div class="modal-overlay" id="customModal">
+    <div class="modal">
+        <h3 id="modalTitle">Title</h3>
+        <p id="modalMessage">Message</p>
+        <div>
+            <button class="modal-btn" id="modalConfirm" onclick="closeModal()">OK</button>
+            <button class="modal-btn secondary" id="modalCancel" onclick="closeModal()" style="display:none;">Cancel</button>
+        </div>
     </div>
 </div>
 
 <script>
     let currentContext = '';
     let currentIndustry = '';
+    let isPro = {{ 'true' if session.get('is_pro') else 'false' }};
+    let generationsUsed = {{ session.get('generations_used', 0) }};
+    let followupsUsed = {{ session.get('followups_used', 0) }};
+
+    function showModal(title, message, confirmText = 'OK', showCancel = false) {
+        document.getElementById('modalTitle').textContent = title;
+        document.getElementById('modalMessage').textContent = message;
+        document.getElementById('modalConfirm').textContent = confirmText;
+        document.getElementById('modalCancel').style.display = showCancel ? 'inline-block' : 'none';
+        document.getElementById('customModal').classList.add('active');
+    }
+
+    function closeModal() {
+        document.getElementById('customModal').classList.remove('active');
+    }
+
+    function updateUI() {
+        if (isPro) {
+            document.getElementById('footerLimit').innerHTML = 'You are a <strong style="color:#fff;">Pro</strong> user. Unlimited access enabled.';
+            document.getElementById('btnExport').style.display = 'flex';
+            document.querySelector('#optLength option[value="long"]').disabled = false;
+        } else {
+            const remaining = 3 - generationsUsed;
+            document.getElementById('footerLimit').innerHTML = `Free tier: <strong style="color:#fff;">${remaining}</strong> generations remaining today. <span style="color:#fff; cursor:pointer; text-decoration:underline;" onclick="initiatePayment()">Upgrade to Pro</span> for unlimited.`;
+            document.querySelector('#optLength option[value="long"]').disabled = true;
+        }
+    }
 
     function highlightText(text) {
         const map = {
@@ -504,9 +603,7 @@ HTML_TEMPLATE = '''
     function toggleAccordion(element) {
         const item = element.parentElement;
         const isActive = item.classList.contains('active');
-
         document.querySelectorAll('.accordion-item').forEach(i => i.classList.remove('active'));
-
         if (!isActive) item.classList.add('active');
     }
 
@@ -549,10 +646,18 @@ HTML_TEMPLATE = '''
 
     async function runSwarm() {
         const prompt = document.getElementById('mainPrompt').value.trim();
-        if (!prompt) return alert('Please enter a business idea.');
+        if (!prompt) return showModal('Missing Input', 'Please enter a business idea to analyze.');
+
+        const length = document.getElementById('optLength').value;
+        if (length === 'long' && !isPro) {
+            return showModal('Pro Feature', 'Deep Dive mode is available only for Pro users. Upgrade to unlock comprehensive 500-word analyses.', 'Upgrade', true);
+        }
+
+        if (!isPro && generationsUsed >= 3) {
+            return showModal('Daily Limit Reached', 'You have used all 3 free generations for today. Upgrade to Pro for unlimited access.', 'Upgrade', true);
+        }
 
         const industry = document.getElementById('optIndustry').value;
-        const length = document.getElementById('optLength').value;
         const tone = document.getElementById('optTone').value;
 
         currentContext = prompt;
@@ -573,9 +678,14 @@ HTML_TEMPLATE = '''
             document.getElementById('inputWrapper').style.display = 'block';
             document.getElementById('resultsArea').classList.add('active');
 
+            if (!isPro) {
+                generationsUsed++;
+                updateUI();
+            }
+
             renderResults(data);
         } catch (e) {
-            alert('Error: ' + e.message);
+            showModal('Error', 'Failed to generate strategy: ' + e.message);
             document.getElementById('swarmLoader').classList.remove('active');
             document.getElementById('inputWrapper').style.display = 'block';
         }
@@ -584,6 +694,10 @@ HTML_TEMPLATE = '''
     async function askFollowup() {
         const q = document.getElementById('followupInput').value.trim();
         if (!q) return;
+
+        if (!isPro && followupsUsed >= 1) {
+            return showModal('Pro Feature', 'Free users get 1 follow-up question. Upgrade to Pro for unlimited follow-ups.', 'Upgrade', true);
+        }
 
         const btn = document.querySelector('.btn-send');
         btn.innerHTML = '<div style="width:16px;height:16px;border:2px solid #000;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;"></div>';
@@ -599,17 +713,28 @@ HTML_TEMPLATE = '''
             const summaryEl = document.getElementById('unifiedSummary');
             summaryEl.innerHTML += `<br><br><strong style="color:#fff;">Q: ${q}</strong><br><br>${highlightText(data.answer)}`;
             document.getElementById('followupInput').value = '';
+
+            if (!isPro) {
+                followupsUsed++;
+            }
         } catch(e) {
-            alert('Follow-up failed: ' + e.message);
+            showModal('Error', 'Follow-up failed: ' + e.message);
         }
 
         btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>';
     }
 
     function copyResults() {
-        const text = document.getElementById('unifiedSummary').innerText + '\\n\\n' +
-                     Array.from(document.querySelectorAll('.accordion-text')).map(e => e.innerText).join('\\n\\n');
-        navigator.clipboard.writeText(text).then(() => alert('Copied to clipboard.'));
+        const text = document.getElementById('unifiedSummary').innerText + '\n\n' +
+                     Array.from(document.querySelectorAll('.accordion-text')).map(e => e.innerText).join('\n\n');
+        navigator.clipboard.writeText(text).then(() => showModal('Copied!', 'Strategy copied to clipboard.'));
+    }
+
+    function exportPDF() {
+        if (!isPro) {
+            return showModal('Pro Feature', 'PDF export is available only for Pro users.', 'Upgrade', true);
+        }
+        showModal('Exporting...', 'Your PDF is being generated. This feature will be available soon!');
     }
 
     async function initiatePayment() {
@@ -635,44 +760,32 @@ HTML_TEMPLATE = '''
                         })
                     }).then(res => res.json()).then(data => {
                         if(data.status === 'success') {
-                            alert('Payment successful! You are now a Pro user.');
+                            isPro = true;
+                            updateUI();
+                            showModal('Payment Successful!', 'Welcome to Winy AI Pro! You now have unlimited access to all features.');
                         } else {
-                            alert('Payment verification failed!');
+                            showModal('Payment Failed', 'Payment verification failed. Please contact support.');
                         }
                     });
                 },
-                prefill: {
-                    name: '',
-                    email: '',
-                    contact: ''
-                },
-                theme: {
-                    color: '#000000'
-                },
-                method: {
-                    upi: true,
-                    card: true,
-                    netbanking: true,
-                    wallet: true
-                },
-                modal: {
-                    ondismiss: function() {
-                        console.log('Checkout closed');
-                    }
-                }
+                prefill: { name: '', email: '', contact: '' },
+                theme: { color: '#000000' },
+                method: { upi: true, card: true, netbanking: true, wallet: true },
+                modal: { ondismiss: function() { console.log('Checkout closed'); } }
             };
             
             const rzp = new Razorpay(options);
-            
             rzp.on('payment.failed', function(response) {
-                alert('Payment failed: ' + response.error.description);
+                showModal('Payment Failed', response.error.description);
             });
-            
             rzp.open();
         } catch (e) {
-            alert('Error: ' + e.message);
+            showModal('Error', 'Failed to initiate payment: ' + e.message);
         }
     }
+
+    // Initialize UI on load
+    updateUI();
 </script>
 <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
 </body>
@@ -681,15 +794,27 @@ HTML_TEMPLATE = '''
 
 @app.route('/')
 def home():
+    if 'generations_used' not in session:
+        session['generations_used'] = 0
+    if 'followups_used' not in session:
+        session['followups_used'] = 0
+    if 'is_pro' not in session:
+        session['is_pro'] = False
     return render_template_string(HTML_TEMPLATE, razorpay_key_id=RAZORPAY_KEY_ID)
 
 @app.route('/generate', methods=['POST'])
 def generate():
+    if not session.get('is_pro') and session.get('generations_used', 0) >= 3:
+        return jsonify({"error": "Daily limit reached"}), 403
+
     data = request.json
     prompt = data['prompt']
     industry = data['industry']
     length = data['length']
     tone = data['tone']
+
+    if length == 'long' and not session.get('is_pro'):
+        return jsonify({"error": "Deep Dive is a Pro feature"}), 403
 
     word_map = {'short': '200 words', 'medium': '350 words', 'long': '500 words'}
     limit = word_map.get(length, '350 words')
@@ -766,10 +891,16 @@ def generate():
         sections['costs'] = base_costs.get(industry, {'Product Dev': 5000, 'Marketing': 3000, 'Operations': 3000, 'Legal': 1500, 'Contingency': 1500})
         sections['costs']['total'] = sum(sections['costs'].values())
 
+    if not session.get('is_pro'):
+        session['generations_used'] = session.get('generations_used', 0) + 1
+
     return jsonify(sections)
 
 @app.route('/followup', methods=['POST'])
 def followup():
+    if not session.get('is_pro') and session.get('followups_used', 0) >= 1:
+        return jsonify({"error": "Follow-up limit reached"}), 403
+
     data = request.json
     q = data['question']
     ctx = data['context']
@@ -777,6 +908,9 @@ def followup():
 
     sys = f"You are the Winy AI Strategy Swarm. Context: User is building a {ind} business based on this idea: '{ctx}'. Answer the following question concisely and professionally in about 150 words."
     ans = call_llm(sys, f"Question: {q}", temperature=0.7)
+
+    if not session.get('is_pro'):
+        session['followups_used'] = session.get('followups_used', 0) + 1
 
     return jsonify({"answer": ans})
 
@@ -816,11 +950,21 @@ def verify_payment():
         ).hexdigest()
         
         if expected_signature == signature:
+            session['is_pro'] = True
+            session['generations_used'] = 0
+            session['followups_used'] = 0
             return jsonify({"status": "success"})
         else:
             return jsonify({"status": "failure"}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route('/reset-limits', methods=['POST'])
+def reset_limits():
+    # Call this once per day via cron job or manually
+    session['generations_used'] = 0
+    session['followups_used'] = 0
+    return jsonify({"status": "reset"})
 
 if __name__ == '__main__':
     print("\n[WINY AI] Swarm Online. Port 5000.\n")
