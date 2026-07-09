@@ -1,6 +1,6 @@
 """
-Winy AI - B&W Glass Chatbot
-Streaming fixed, Code model, Pro-locked Swarm, Like feedback, History
+Winy AI - B&W Glass Chatbot v3
+Fixed 400 error, bright placeholder, streaming, history, like feedback
 """
 import os, json, hmac, hashlib, sqlite3, logging, uuid, base64
 from datetime import datetime, date, timedelta
@@ -67,7 +67,7 @@ def require_auth(f):
     return decorated
 
 # ============================================================================
-# STREAMING ENGINE - FIXED FOR MULTI-TURN
+# PROMPTS & STREAMING
 # ============================================================================
 SYSTEM_PROMPT = """You are Winy AI, a universal assistant helpful with any topic.
 Be direct, articulate, and use markdown when helpful. Never mention being an AI unless asked."""
@@ -90,7 +90,9 @@ def stream_groq(messages):
             stream=True, timeout=120)
 
         if resp.status_code != 200:
-            yield f"data: {json.dumps({'error': f'API returned {resp.status_code}'})}\n\n"
+            error_body = resp.text[:200]
+            logger.error(f"Groq API {resp.status_code}: {error_body}")
+            yield f"data: {json.dumps({'error': f'API error {resp.status_code}'})}\n\n"
             yield "data: [DONE]\n\n"
             return
 
@@ -122,6 +124,39 @@ def stream_groq(messages):
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
     finally:
         yield "data: [DONE]\n\n"
+
+def build_groq_messages(history_rows, sys_prompt):
+    """Builds a valid Groq message array with proper role mapping and alternation."""
+    messages = [{"role": "system", "content": sys_prompt}]
+    
+    # Map DB roles to Groq roles and filter empties
+    mapped = []
+    for m in history_rows:
+        role = m['role']
+        content = m['content'].strip() if m['content'] else ''
+        if not content:
+            continue
+        if role == 'ai':
+            role = 'assistant'
+        elif role not in ('user', 'assistant', 'system'):
+            continue
+        mapped.append({"role": role, "content": content})
+    
+    # Ensure strict user/assistant alternation (Groq requirement)
+    last_role = 'system'
+    for msg in mapped:
+        if msg['role'] == last_role:
+            # Skip duplicate consecutive roles
+            continue
+        messages.append(msg)
+        last_role = msg['role']
+    
+    # Groq requires the last non-system message to be from user
+    # If it ends with assistant, remove it (it will be regenerated)
+    while len(messages) > 1 and messages[-1]['role'] == 'assistant':
+        messages.pop()
+    
+    return messages
 
 # ============================================================================
 # HTML TEMPLATE
@@ -240,7 +275,8 @@ body{background:#050505;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
 .input-wrapper{display:flex;align-items:flex-end;gap:10px;background:rgba(255,255,255,0.03);backdrop-filter:blur(30px);border:1px solid rgba(255,255,255,0.06);border-radius:22px;padding:5px 5px 5px 18px;transition:all 0.3s}
 .input-wrapper:focus-within{border-color:rgba(255,255,255,0.15)}
 .input-field{flex:1;background:transparent;border:none;outline:none;color:rgba(255,255,255,0.9);font-size:15px;line-height:1.5;max-height:120px;min-height:24px;font-family:inherit;padding:11px 0;resize:none}
-.input-field::placeholder{color:rgba(255,255,255,0.2)}
+/* BRIGHTER PLACEHOLDER */
+.input-field::placeholder{color:rgba(255,255,255,0.45)}
 .send-btn{background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.15);width:40px;height:40px;border-radius:50%;cursor:pointer;color:rgba(255,255,255,0.9);display:flex;align-items:center;justify-content:center;transition:all 0.3s;flex-shrink:0}
 .send-btn:hover{background:rgba(255,255,255,0.2)}
 .send-btn:disabled{opacity:0.2;cursor:not-allowed}
@@ -256,7 +292,7 @@ body{background:#050505;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
 .gate-card .sub{color:rgba(255,255,255,0.35);font-size:14px;margin-bottom:32px}
 .m-input{width:100%;padding:14px 16px;border:1px solid rgba(255,255,255,0.08);border-radius:12px;font-size:14px;margin-bottom:12px;outline:none;background:rgba(255,255,255,0.03);color:#fff;font-family:inherit}
 .m-input:focus{border-color:rgba(255,255,255,0.2)}
-.m-input::placeholder{color:rgba(255,255,255,0.2)}
+.m-input::placeholder{color:rgba(255,255,255,0.35)}
 .m-btn{width:100%;padding:14px;border:none;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;transition:all 0.3s}
 .m-btn-primary{background:#fff;color:#000}
 .m-btn-primary:hover{opacity:0.9}
@@ -620,30 +656,50 @@ def chat():
     user_msg = data.get('message', '').strip()
     conv_id = data.get('conversation_id')
     model_mode = data.get('model', 'winy11')
-    if not user_msg: return jsonify({"error": "Empty message"}), 400
+    
+    if not user_msg:
+        return jsonify({"error": "Empty message"}), 400
+    
     conn = get_db()
     user = conn.execute("SELECT is_pro FROM users WHERE firebase_uid=?", (uid,)).fetchone()
     is_pro = bool(user['is_pro']) if user else False
+    
     if model_mode == 'swarm' and not is_pro:
         conn.close()
         return jsonify({"error": "Swarm Mode requires Pro subscription."}), 403
+    
     if not is_pro:
         usage = conn.execute("SELECT message_count FROM daily_usage WHERE firebase_uid=? AND usage_date=?", (uid, today)).fetchone()
         if (usage['message_count'] if usage else 0) >= 10:
             conn.close()
             return jsonify({"error": "Daily limit reached. Upgrade to Pro."}), 403
+    
     if not conv_id:
         title = user_msg[:50] + ('...' if len(user_msg) > 50 else '')
         cur = conn.execute("INSERT INTO conversations (firebase_uid, title) VALUES (?, ?)", (uid, title))
         conv_id = cur.lastrowid
+    
+    # Save user message FIRST, then commit
     conn.execute("INSERT INTO messages (conversation_id, role, content) VALUES (?, 'user', ?)", (conv_id, user_msg))
-    history = conn.execute("SELECT role, content FROM messages WHERE conversation_id=? ORDER BY created_at DESC LIMIT 20", (conv_id,)).fetchall()
+    conn.commit()
+    
+    # Load history with validation
+    history = conn.execute(
+        "SELECT role, content FROM messages WHERE conversation_id=? AND content IS NOT NULL AND TRIM(content) != '' ORDER BY created_at DESC LIMIT 20",
+        (conv_id,)
+    ).fetchall()
     conn.close()
+    
     prompts = {'swarm': SWARM_PROMPT, 'code': CODE_PROMPT, 'winy11': SYSTEM_PROMPT}
     sys_prompt = prompts.get(model_mode, SYSTEM_PROMPT)
-    messages = [{"role": "system", "content": sys_prompt}]
-    for m in reversed(history):
-        messages.append({"role": m['role'], "content": m['content']})
+    
+    # Build validated message array
+    messages = build_groq_messages(history, sys_prompt)
+    
+    # Final safety check: must have at least system + user
+    if len(messages) < 2 or messages[-1]['role'] != 'user':
+        logger.error(f"Invalid message array: {[m['role'] for m in messages]}")
+        return jsonify({"error": "Conversation state error. Please start a new chat."}), 400
 
     def generate():
         try:
