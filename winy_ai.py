@@ -1,821 +1,682 @@
 """
-Winy AI - Your Personal Problem-Solving Swarm
-A comprehensive Flask application for solving any problem using AI.
-Features: Firebase Authentication, Razorpay Payments, Groq AI Integration,
-YouTube Transcript Analysis, SQLite Database, IP-based Rate Limiting.
+Winy AI - Pure Conversational Intelligence
+A premium glassmorphic AI chatbot with streaming, memory, and auth.
 """
-
-import os
-import re
-import json
-import time
-import hmac
-import hashlib
-import sqlite3
-import logging
-import requests
-import razorpay
-import uuid
+import os, json, hmac, hashlib, sqlite3, logging, uuid, re
 from datetime import datetime, date, timedelta
 from functools import wraps
-from collections import defaultdict
+from flask import Flask, request, jsonify, render_template_string, session, Response, stream_with_context
+import requests as http_requests
+import razorpay
 
-# Initialize Flask App
-from flask import Flask, request, jsonify, render_template_string, session, g
-
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "winy-ai-secret-key-change-in-production")
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
-app.config['JSON_SORT_KEYS'] = False
-
-# Configure Logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+app.secret_key = os.environ.get("SECRET_KEY", "winy-secret-change-me")
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Environment Variables
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID")
 RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET")
+razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET)) if RAZORPAY_KEY_ID else None
 
-# API Configuration
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_HEADERS = {
-    "Authorization": f"Bearer {GROQ_API_KEY}",
-    "Content-Type": "application/json"
-}
-
-# Initialize Razorpay
-razorpay_client = None
-if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
-    try:
-        razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
-        logger.info("Razorpay initialized")
-    except Exception as e:
-        logger.error(f"Razorpay init error: {e}")
-
-# IP Tracking
-ip_usage_tracker = defaultdict(lambda: {'count': 0, 'date': None})
-
-# Database Setup
-DATABASE_PATH = 'winy_ai.db'
-
-def get_db_connection():
-    conn = sqlite3.connect(DATABASE_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
+# ============================================================================
+# DATABASE
+# ============================================================================
 def init_db():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute('''CREATE TABLE IF NOT EXISTS users (
+    conn = sqlite3.connect('winy.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         firebase_uid TEXT UNIQUE NOT NULL,
-        email TEXT NOT NULL,
-        is_pro INTEGER DEFAULT 0,
-        pro_expiry DATE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        email TEXT, is_pro INTEGER DEFAULT 0, pro_expiry DATE
     )''')
-    
-    cursor.execute('''CREATE TABLE IF NOT EXISTS daily_usage (
+    c.execute('''CREATE TABLE IF NOT EXISTS conversations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         firebase_uid TEXT NOT NULL,
-        ip_address TEXT NOT NULL,
-        usage_date DATE NOT NULL,
-        queries_count INTEGER DEFAULT 0,
-        followups_count INTEGER DEFAULT 0,
+        title TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id INTEGER NOT NULL,
+        role TEXT NOT NULL, content TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(conversation_id) REFERENCES conversations(id)
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS daily_usage (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        firebase_uid TEXT NOT NULL, usage_date DATE NOT NULL,
+        message_count INTEGER DEFAULT 0,
         UNIQUE(firebase_uid, usage_date)
     )''')
-    
-    cursor.execute('''CREATE TABLE IF NOT EXISTS query_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        firebase_uid TEXT NOT NULL,
-        query_type TEXT,
-        query_text TEXT,
-        result_json TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )''')
-    
-    conn.commit()
-    conn.close()
-    logger.info("Database initialized")
+    conn.commit(); conn.close()
 
 init_db()
 
-def get_today():
-    return date.today().isoformat()
-
-def get_client_ip():
-    if request.headers.getlist("X-Forwarded-For"):
-        return request.headers.getlist("X-Forwarded-For")[0].split(',')[0].strip()
-    return request.remote_addr
-
-def clean_text(text):
-    if not text:
-        return ""
-    text = text.replace('**', '').replace('*', '').replace('_', '')
-    text = re.sub(r'#+\s*', '', text)
-    return text.strip()
+def get_db():
+    conn = sqlite3.connect('winy.db')
+    conn.row_factory = sqlite3.Row
+    return conn
 
 def require_auth(f):
     @wraps(f)
-    def decorated_function(*args, **kwargs):
+    def decorated(*args, **kwargs):
         if 'firebase_uid' not in session:
-            return jsonify({"error": "Authentication required"}), 401
+            return jsonify({"error": "Auth required"}), 401
         return f(*args, **kwargs)
-    return decorated_function
+    return decorated
 
-def call_groq_llm(system_prompt, user_prompt, temperature=0.7):
-    if not GROQ_API_KEY:
-        return "Error: GROQ_API_KEY not configured"
-        
+# ============================================================================
+# STREAMING LLM ENGINE
+# ============================================================================
+SYSTEM_PROMPT = """You are Winy AI, a pure conversational intelligence. 
+You are helpful, precise, and articulate. You can discuss any topic — 
+technical, creative, analytical, personal, or academic.
+Never refuse reasonable requests. Be direct. Use markdown when helpful.
+Do not mention being an AI model unless asked. Just be intelligent."""
+
+def stream_groq(messages):
+    """Stream tokens from Groq API"""
     try:
-        response = requests.post(GROQ_URL, headers=GROQ_HEADERS, json={
-            "model": "llama-3.1-8b-instant",
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            "temperature": temperature,
-            "max_tokens": 3000
-        }, timeout=120)
+        resp = http_requests.post(GROQ_URL, 
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+            json={"model": "llama-3.1-8b-instant", "messages": messages, 
+                  "stream": True, "max_tokens": 4096, "temperature": 0.7},
+            stream=True, timeout=120)
         
-        if response.status_code == 200:
-            result = response.json()
-            if 'choices' in result and len(result['choices']) > 0:
-                return clean_text(result['choices'][0]['message']['content'])
-        return "Error: AI service unavailable"
+        for line in resp.iter_lines():
+            if line:
+                decoded = line.decode('utf-8')
+                if decoded.startswith('data: ') and decoded != 'data: [DONE]':
+                    try:
+                        chunk = json.loads(decoded[6:])
+                        delta = chunk['choices'][0].get('delta', {})
+                        content = delta.get('content', '')
+                        if content:
+                            yield f"data: {json.dumps({'token': content})}\n\n"
+                    except: pass
+        yield "data: [DONE]\n\n"
     except Exception as e:
-        logger.error(f"LLM error: {e}")
-        return f"Error: {str(e)}"
+        logger.error(f"Stream error: {e}")
+        yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
-def parse_json_response(raw_text):
-    if not raw_text:
-        return None
-    cleaned = raw_text.strip()
-    if cleaned.startswith('```json'):
-        cleaned = cleaned[7:]
-    if cleaned.startswith('```'):
-        cleaned = cleaned[3:]
-    if cleaned.endswith('```'):
-        cleaned = cleaned[:-3]
-    cleaned = cleaned.strip()
-    
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        cleaned = re.sub(r',\s*}', '}', cleaned)
-        cleaned = re.sub(r',\s*]', ']', cleaned)
-        try:
-            return json.loads(cleaned)
-        except:
-            return None
-
-def get_youtube_transcript(video_url):
-    try:
-        from youtube_transcript_api import YouTubeTranscriptApi
-        
-        video_id = None
-        if "youtube.com/watch?v=" in video_url:
-            video_id = video_url.split("v=")[1].split("&")[0]
-        elif "youtu.be/" in video_url:
-            video_id = video_url.split("youtu.be/")[1].split("?")[0]
-            
-        if not video_id:
-            return None, "Invalid YouTube URL"
-            
-        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-        full_text = " ".join([entry['text'] for entry in transcript_list])
-        return full_text, None
-    except Exception as e:
-        logger.error(f"YouTube error: {e}")
-        return None, str(e)
-
-# ==============================================================================
-# HTML TEMPLATE - Updated for General Problem Solving
-# ==============================================================================
-
-HTML_TEMPLATE = '''
+# ============================================================================
+# HTML TEMPLATE - PURE GLASS CHATBOT
+# ============================================================================
+HTML_TEMPLATE = r'''
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Winy AI | Your Problem-Solving Swarm</title>
-    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #fff; color: #000; min-height: 100vh; }
-        .bg-shape { position: fixed; border-radius: 50%; filter: blur(100px); z-index: 0; }
-        .shape-1 { width: 600px; height: 600px; background: #f0f0f0; top: -150px; left: -150px; }
-        .shape-2 { width: 500px; height: 500px; background: #e8e8e8; bottom: -100px; right: -100px; }
-        
-        nav { position: fixed; top: 24px; left: 50%; transform: translateX(-50%); width: 92%; max-width: 900px; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; z-index: 1000; background: rgba(255,255,255,0.85); backdrop-filter: blur(20px); border: 1px solid rgba(0,0,0,0.08); border-radius: 100px; }
-        nav.pro-nav { background: #000; border-color: #333; }
-        nav.pro-nav * { color: #fff; }
-        .logo { font-size: 18px; font-weight: 700; }
-        .user-avatar { width: 36px; height: 36px; border-radius: 50%; background: #000; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 600; }
-        nav.pro-nav .user-avatar { background: #fff; color: #000; }
-        .btn { padding: 8px 16px; border-radius: 100px; font-size: 13px; font-weight: 600; cursor: pointer; border: none; }
-        .btn-primary { background: #000; color: #fff; }
-        .btn-secondary { background: rgba(0,0,0,0.05); }
-        nav.pro-nav .btn-primary { background: #fff; color: #000; }
-        .pro-badge { background: #10b981; color: #fff; padding: 4px 12px; border-radius: 100px; font-size: 11px; font-weight: 700; }
-        
-        .container { max-width: 900px; margin: 0 auto; padding: 140px 24px 60px; position: relative; z-index: 1; }
-        .hero { text-align: center; margin-bottom: 60px; }
-        .hero h1 { font-size: 52px; font-weight: 800; margin-bottom: 16px; letter-spacing: -2px; }
-        .hero p { font-size: 18px; color: #666; max-width: 600px; margin: 0 auto; }
-        
-        .glass-card { background: rgba(255,255,255,0.7); backdrop-filter: blur(40px); border: 1px solid rgba(0,0,0,0.08); border-radius: 32px; padding: 48px; margin-bottom: 40px; box-shadow: 0 30px 60px rgba(0,0,0,0.06); }
-        .main-input { width: 100%; background: rgba(0,0,0,0.03); border: 1px solid rgba(0,0,0,0.08); border-radius: 16px; padding: 24px; font-size: 16px; min-height: 120px; margin-bottom: 24px; resize: none; outline: none; }
-        .main-input:focus { border-color: #000; background: rgba(0,0,0,0.05); }
-        .main-input::placeholder { color: #999; }
-        
-        .mode-tabs { display: flex; gap: 12px; margin-bottom: 24px; }
-        .mode-tab { flex: 1; padding: 16px; border: 1px solid rgba(0,0,0,0.08); border-radius: 12px; background: rgba(0,0,0,0.02); cursor: pointer; font-weight: 600; transition: all 0.3s; }
-        .mode-tab.active { background: #000; color: #fff; border-color: #000; }
-        .mode-tab:hover:not(.active) { background: rgba(0,0,0,0.05); }
-        
-        .options-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
-        .option-card { background: rgba(0,0,0,0.03); border: 1px solid rgba(0,0,0,0.08); border-radius: 16px; padding: 20px; }
-        .option-label { font-size: 11px; text-transform: uppercase; color: #666; margin-bottom: 8px; display: block; font-weight: 600; }
-        .option-select { width: 100%; background: transparent; border: none; font-size: 14px; outline: none; }
-        
-        .btn-launch { width: 100%; background: #000; color: #fff; border: none; border-radius: 16px; padding: 20px; font-size: 16px; font-weight: 600; cursor: pointer; transition: all 0.3s; }
-        .btn-launch:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 15px 40px rgba(0,0,0,0.2); }
-        .btn-launch:disabled { opacity: 0.5; cursor: not-allowed; }
-        
-        .loader { display: none; text-align: center; padding: 80px 20px; }
-        .loader.active { display: block; }
-        .spinner { width: 50px; height: 50px; border: 4px solid rgba(0,0,0,0.1); border-top-color: #000; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 24px; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        
-        .footer-stats { text-align: center; padding: 24px; border-top: 1px solid rgba(0,0,0,0.08); color: #666; font-size: 13px; }
-        
-        .overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 2000; align-items: center; justify-content: center; padding: 20px; }
-        .overlay.active { display: flex; }
-        .overlay-backdrop { position: absolute; background: rgba(0,0,0,0.5); backdrop-filter: blur(8px); top: 0; left: 0; right: 0; bottom: 0; }
-        .overlay-content { position: relative; background: #fff; border-radius: 32px; width: 100%; max-width: 800px; max-height: 90vh; overflow-y: auto; box-shadow: 0 30px 60px rgba(0,0,0,0.3); }
-        .overlay-header { position: sticky; top: 0; background: rgba(255,255,255,0.95); backdrop-filter: blur(20px); padding: 24px 32px; border-bottom: 1px solid rgba(0,0,0,0.08); display: flex; justify-content: space-between; align-items: center; z-index: 10; border-radius: 32px 32px 0 0; }
-        .close-btn { width: 40px; height: 40px; border-radius: 50%; border: none; background: #000; color: #fff; cursor: pointer; font-size: 20px; }
-        .overlay-body { padding: 32px; }
-        
-        .result-summary { background: rgba(0,0,0,0.03); border-left: 4px solid #000; padding: 24px; border-radius: 12px; margin-bottom: 32px; line-height: 1.7; }
-        .sections-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-bottom: 32px; }
-        .section-card { background: rgba(0,0,0,0.02); border: 1px solid rgba(0,0,0,0.08); border-radius: 20px; padding: 28px; }
-        .section-card h3 { font-size: 12px; text-transform: uppercase; color: #666; margin-bottom: 16px; font-weight: 700; }
-        .section-card p { font-size: 14px; line-height: 1.7; }
-        
-        .youtube-section { margin-top: 40px; padding: 32px; background: rgba(0,0,0,0.02); border-radius: 24px; border: 1px solid rgba(0,0,0,0.08); }
-        .youtube-section h3 { font-size: 18px; margin-bottom: 16px; }
-        .youtube-input { display: flex; gap: 12px; margin-bottom: 16px; }
-        .youtube-input input { flex: 1; background: rgba(0,0,0,0.03); border: 1px solid rgba(0,0,0,0.08); border-radius: 12px; padding: 16px; }
-        .youtube-input button { background: #ff0000; color: #fff; border: none; border-radius: 12px; padding: 16px 32px; font-weight: 600; cursor: pointer; }
-        .youtube-result { background: #fff; border: 1px solid rgba(0,0,0,0.08); border-radius: 12px; padding: 24px; margin-top: 16px; display: none; }
-        .youtube-result.active { display: block; }
-        
-        .followup-section { margin-top: 32px; padding-top: 32px; border-top: 1px solid rgba(0,0,0,0.08); }
-        .followup-input { width: 100%; background: rgba(0,0,0,0.03); border: 1px solid rgba(0,0,0,0.08); border-radius: 100px; padding: 16px; margin-bottom: 12px; }
-        .qa-list { margin-top: 24px; }
-        .qa-item { margin-bottom: 20px; }
-        .qa-question { background: rgba(0,0,0,0.03); border-left: 3px solid #000; padding: 16px; border-radius: 8px; margin-bottom: 12px; font-weight: 600; }
-        .qa-answer { background: rgba(0,0,0,0.02); padding: 16px; border-radius: 8px; line-height: 1.7; }
-        
-        .modal-backdrop { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,0.95); backdrop-filter: blur(20px); z-index: 3000; align-items: center; justify-content: center; }
-        .modal-backdrop.active { display: flex; }
-        .modal-box { background: #fff; border: 1px solid rgba(0,0,0,0.08); border-radius: 32px; padding: 40px; max-width: 450px; width: 90%; }
-        .modal-box h2 { text-align: center; margin-bottom: 8px; }
-        .modal-box > p { text-align: center; color: #666; margin-bottom: 32px; }
-        .tabs { display: flex; gap: 8px; margin-bottom: 24px; background: rgba(0,0,0,0.05); padding: 4px; border-radius: 100px; }
-        .tab { flex: 1; padding: 12px; border: none; background: transparent; border-radius: 100px; font-weight: 600; cursor: pointer; }
-        .tab.active { background: #000; color: #fff; }
-        .input-field { width: 100%; background: rgba(0,0,0,0.03); border: 1px solid rgba(0,0,0,0.08); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
-        .btn-full { width: 100%; background: #000; color: #fff; border: none; border-radius: 100px; padding: 16px; font-weight: 600; cursor: pointer; }
-        .divider { display: flex; align-items: center; margin: 24px 0; color: #666; font-size: 12px; }
-        .divider::before, .divider::after { content: ''; flex: 1; border-bottom: 1px solid rgba(0,0,0,0.08); }
-        .google-btn { width: 100%; background: #fff; border: 1px solid rgba(0,0,0,0.08); padding: 14px; border-radius: 100px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 12px; }
-        
-        .hl { display: inline-block; padding: 2px 8px; border-radius: 6px; font-weight: 700; }
-        .hl-key { background: #dbeafe; color: #1e40af; }
-        .hl-solution { background: #dcfce7; color: #166534; }
-        .hl-step { background: #f3e8ff; color: #6b21a8; }
-        
-        @media (max-width: 768px) {
-            .hero h1 { font-size: 36px; }
-            .glass-card { padding: 24px; }
-            nav { width: 95%; }
-            .mode-tabs { flex-direction: column; }
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Winy AI</title>
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#ffffff;--glass:rgba(255,255,255,0.6);--glass-heavy:rgba(255,255,255,0.85);--border:rgba(0,0,0,0.06);--text:#0a0a0a;--text-secondary:#666;--user-msg:rgba(0,0,0,0.06);--ai-msg:rgba(0,0,0,0.02)}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);height:100vh;overflow:hidden;position:relative}
+.bg-gradient{position:fixed;top:-20%;left:-10%;width:60vw;height:60vw;background:radial-gradient(circle,#f0f0f0 0%,transparent 70%);opacity:0.5;pointer-events:none;z-index:0}
+.bg-gradient-2{position:fixed;bottom:-20%;right:-10%;width:50vw;height:50vw;background:radial-gradient(circle,#ebebeb 0%,transparent 70%);opacity:0.4;pointer-events:none;z-index:0}
+
+/* SIDEBAR */
+.sidebar{position:fixed;left:0;top:0;bottom:0;width:280px;background:var(--glass);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border-right:1px solid var(--border);z-index:50;display:flex;flex-direction:column;transition:transform 0.3s ease}
+.sidebar.collapsed{transform:translateX(-100%)}
+.sidebar-header{padding:20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.sidebar-logo{font-size:18px;font-weight:700;letter-spacing:-0.5px}
+.new-chat-btn{width:100%;padding:12px;margin:16px 0 8px;background:var(--text);color:#fff;border:none;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;width:calc(100% - 32px);margin-left:16px;margin-right:16px}
+.new-chat-btn:hover{opacity:0.85}
+.history-list{flex:1;overflow-y:auto;padding:8px}
+.history-item{padding:12px 16px;border-radius:10px;cursor:pointer;font-size:13px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:background 0.2s}
+.history-item:hover,.history-item.active{background:rgba(0,0,0,0.05);color:var(--text)}
+.sidebar-footer{padding:16px;border-top:1px solid var(--border)}
+.user-row{display:flex;align-items:center;gap:10px}
+.avatar{width:32px;height:32px;border-radius:50%;background:var(--text);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;flex-shrink:0}
+.user-name{font-size:13px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.logout-btn{font-size:11px;color:var(--text-secondary);cursor:pointer;border:none;background:none;padding:4px 8px;border-radius:6px}
+.logout-btn:hover{background:rgba(0,0,0,0.05)}
+.pro-pill{font-size:10px;font-weight:700;background:var(--text);color:#fff;padding:2px 8px;border-radius:100px;margin-left:auto}
+
+/* MAIN CHAT AREA */
+.chat-area{margin-left:280px;height:100vh;display:flex;flex-direction:column;position:relative;z-index:10;transition:margin-left 0.3s ease}
+.chat-area.expanded{margin-left:0}
+.chat-header{padding:16px 24px;display:flex;align-items:center;gap:12px;background:var(--glass);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-bottom:1px solid var(--border);flex-shrink:0}
+.menu-toggle{width:36px;height:36px;border-radius:10px;border:1px solid var(--border);background:transparent;cursor:pointer;display:none;align-items:center;justify-content:center;font-size:18px;color:var(--text)}
+.chat-title{font-size:15px;font-weight:600}
+
+/* MESSAGES */
+.messages-container{flex:1;overflow-y:auto;padding:24px;scroll-behavior:smooth}
+.message{max-width:720px;margin:0 auto 24px;display:flex;gap:16px;animation:fadeIn 0.3s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.message.user{flex-direction:row-reverse}
+.msg-avatar{width:32px;height:32px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600}
+.message.ai .msg-avatar{background:var(--text);color:#fff}
+.message.user .msg-avatar{background:rgba(0,0,0,0.1);color:var(--text)}
+.msg-content{flex:1;min-width:0}
+.msg-bubble{padding:16px 20px;border-radius:18px;font-size:15px;line-height:1.7;word-wrap:break-word}
+.message.ai .msg-bubble{background:var(--ai-msg);border-top-left-radius:4px}
+.message.user .msg-bubble{background:var(--user-msg);border-top-right-radius:4px}
+.msg-bubble p{margin-bottom:12px}
+.msg-bubble p:last-child{margin-bottom:0}
+.msg-bubble code{background:rgba(0,0,0,0.06);padding:2px 6px;border-radius:4px;font-size:13px;font-family:"SF Mono",Monaco,monospace}
+.msg-bubble pre{background:rgba(0,0,0,0.05);padding:16px;border-radius:12px;overflow-x:auto;margin:12px 0;font-size:13px;line-height:1.5}
+.msg-bubble pre code{background:none;padding:0}
+.msg-bubble strong{font-weight:700}
+.msg-bubble ul,.msg-bubble ol{padding-left:20px;margin:8px 0}
+.msg-bubble li{margin-bottom:4px}
+.cursor{display:inline-block;width:2px;height:16px;background:var(--text);margin-left:2px;animation:blink 1s infinite}
+@keyframes blink{0%,50%{opacity:1}51%,100%{opacity:0}}
+
+/* EMPTY STATE */
+.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;text-align:center;padding:40px;opacity:0.6}
+.empty-state h2{font-size:28px;font-weight:700;margin-bottom:8px;letter-spacing:-0.5px}
+.empty-state p{font-size:15px;color:var(--text-secondary);margin-bottom:32px}
+.suggestions{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;max-width:600px}
+.suggestion{padding:10px 18px;border:1px solid var(--border);border-radius:100px;font-size:13px;cursor:pointer;transition:all 0.2s;background:var(--glass);backdrop-filter:blur(10px)}
+.suggestion:hover{background:rgba(0,0,0,0.05);border-color:rgba(0,0,0,0.15)}
+
+/* INPUT AREA */
+.input-area{padding:16px 24px 24px;background:var(--glass-heavy);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border-top:1px solid var(--border);flex-shrink:0}
+.input-wrapper{max-width:720px;margin:0 auto;position:relative}
+.chat-input{width:100%;min-height:52px;max-height:200px;padding:14px 52px 14px 20px;border:1px solid var(--border);border-radius:16px;background:rgba(255,255,255,0.8);font-size:15px;font-family:inherit;resize:none;outline:none;line-height:1.5;transition:border-color 0.2s}
+.chat-input:focus{border-color:rgba(0,0,0,0.2)}
+.chat-input::placeholder{color:#aaa}
+.send-btn{position:absolute;right:8px;bottom:8px;width:36px;height:36px;border-radius:10px;border:none;background:var(--text);color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:opacity 0.2s}
+.send-btn:hover{opacity:0.8}
+.send-btn:disabled{opacity:0.3;cursor:not-allowed}
+.send-btn svg{width:18px;height:18px}
+.limit-banner{text-align:center;padding:8px;font-size:12px;color:var(--text-secondary);margin-bottom:8px}
+.limit-banner span{color:var(--text);font-weight:600;cursor:pointer;text-decoration:underline}
+
+/* LOGIN MODAL */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(255,255,255,0.8);backdrop-filter:blur(20px);z-index:200;align-items:center;justify-content:center}
+.modal-overlay.active{display:flex}
+.modal-card{background:var(--glass-heavy);backdrop-filter:blur(30px);border:1px solid var(--border);border-radius:24px;padding:40px;max-width:380px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.08)}
+.modal-card h2{font-size:24px;font-weight:700;text-align:center;margin-bottom:4px}
+.modal-card .sub{text-align:center;color:var(--text-secondary);font-size:14px;margin-bottom:28px}
+.m-input{width:100%;padding:14px 16px;border:1px solid var(--border);border-radius:12px;font-size:14px;margin-bottom:12px;outline:none;background:rgba(255,255,255,0.8);font-family:inherit}
+.m-input:focus{border-color:rgba(0,0,0,0.2)}
+.m-btn{width:100%;padding:14px;border:none;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;transition:opacity 0.2s}
+.m-btn-primary{background:var(--text);color:#fff}
+.m-btn-secondary{background:transparent;border:1px solid var(--border);color:var(--text);margin-top:10px}
+.m-btn:hover{opacity:0.85}
+.m-divider{display:flex;align-items:center;gap:12px;margin:20px 0;color:var(--text-secondary);font-size:12px}
+.m-divider::before,.m-divider::after{content:'';flex:1;height:1px;background:var(--border)}
+
+@media(max-width:768px){
+  .sidebar{transform:translateX(-100%)}
+  .sidebar.open{transform:translateX(0)}
+  .chat-area{margin-left:0!important}
+  .menu-toggle{display:flex}
+  .message{gap:10px}
+  .msg-bubble{padding:12px 16px;font-size:14px}
+  .input-area{padding:12px 16px 16px}
+}
+</style>
 </head>
 <body>
-    <div class="bg-shape shape-1"></div>
-    <div class="bg-shape shape-2"></div>
+<div class="bg-gradient"></div>
+<div class="bg-gradient-2"></div>
 
-    <nav id="mainNav">
-        <div class="logo" id="navLogo">Winy AI</div>
-        <div id="navButtons"><button class="btn btn-secondary" onclick="showLoginModal()">Login</button></div>
-    </nav>
+<!-- Sidebar -->
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-logo">Winy AI</div>
+  </div>
+  <button class="new-chat-btn" onclick="newChat()">+ New Chat</button>
+  <div class="history-list" id="historyList"></div>
+  <div class="sidebar-footer" id="sidebarFooter">
+    <button class="m-btn m-btn-secondary" onclick="showLogin()" style="margin:0;font-size:13px">Login to continue</button>
+  </div>
+</aside>
 
-    <div class="container">
-        <div class="hero">
-            <h1>Deploy the Swarm.</h1>
-            <p>Break down any problem. Get clear solutions. From business to personal challenges.</p>
-        </div>
-
-        <div id="inputWrapper">
-            <div class="glass-card">
-                <div class="mode-tabs">
-                    <div class="mode-tab active" onclick="setMode('problem')" id="tabProblem">🎯 Problem Solver</div>
-                    <div class="mode-tab" onclick="setMode('business')" id="tabBusiness">💼 Business Strategy</div>
-                    <div class="mode-tab" onclick="setMode('learning')" id="tabLearning">📚 Learning Helper</div>
-                </div>
-                
-                <textarea class="main-input" id="mainPrompt" placeholder="Describe your problem or question in detail..." disabled></textarea>
-                
-                <div class="options-grid" id="optionsGrid">
-                    <div class="option-card">
-                        <span class="option-label">Category</span>
-                        <select class="option-select" id="optCategory" disabled>
-                            <option value="General">General Problem</option>
-                            <option value="Technical">Technical Issue</option>
-                            <option value="Personal">Personal Development</option>
-                            <option value="Career">Career & Work</option>
-                            <option value="Education">Education & Learning</option>
-                            <option value="Health">Health & Wellness</option>
-                        </select>
-                    </div>
-                    <div class="option-card">
-                        <span class="option-label">Depth</span>
-                        <select class="option-select" id="optDepth" disabled>
-                            <option value="quick">Quick Answer</option>
-                            <option value="detailed" selected>Detailed Breakdown</option>
-                            <option value="comprehensive">Comprehensive Guide (Pro)</option>
-                        </select>
-                    </div>
-                </div>
-                
-                <button class="btn-launch" id="btnLaunch" onclick="runSwarm()" disabled>
-                    Login to Deploy Swarm
-                </button>
-            </div>
-        </div>
-
-        <!-- YouTube Section -->
-        <div class="youtube-section" id="youtubeSection" style="display:none;">
-            <h3>🎥 YouTube Video Analysis (Pro)</h3>
-            <p style="color:#666; margin-bottom:20px;">Extract insights from any YouTube video</p>
-            <div class="youtube-input">
-                <input type="text" id="youtubeUrl" placeholder="https://youtube.com/watch?v=...">
-                <button onclick="analyzeYouTube()">Analyze Video</button>
-            </div>
-            <div class="youtube-result" id="youtubeResult"></div>
-        </div>
-
-        <div class="loader" id="loader">
-            <div class="spinner"></div>
-            <p style="color:#666;">Swarm is analyzing your problem...</p>
-        </div>
-
-        <div class="footer-stats" id="footerStats">Please login to access features</div>
+<!-- Chat Area -->
+<main class="chat-area" id="chatArea">
+  <div class="chat-header">
+    <button class="menu-toggle" id="menuToggle" onclick="toggleSidebar()">☰</button>
+    <div class="chat-title" id="chatTitle">New Conversation</div>
+  </div>
+  
+  <div class="messages-container" id="messagesContainer">
+    <div class="empty-state" id="emptyState">
+      <h2>What's on your mind?</h2>
+      <p>I can help with anything. Just start typing.</p>
+      <div class="suggestions">
+        <div class="suggestion" onclick="useSuggestion(this)">Explain quantum computing simply</div>
+        <div class="suggestion" onclick="useSuggestion(this)">Help me debug my Python code</div>
+        <div class="suggestion" onclick="useSuggestion(this)">Write a professional email</div>
+        <div class="suggestion" onclick="useSuggestion(this)">Plan a 7-day Japan trip</div>
+        <div class="suggestion" onclick="useSuggestion(this)">Compare React vs Vue</div>
+      </div>
     </div>
+  </div>
 
-    <!-- Results Overlay -->
-    <div class="overlay" id="resultsOverlay">
-        <div class="overlay-backdrop" onclick="closeResultsOverlay()"></div>
-        <div class="overlay-content">
-            <div class="overlay-header">
-                <h2>Solution Breakdown</h2>
-                <button class="close-btn" onclick="closeResultsOverlay()">✕</button>
-            </div>
-            <div class="overlay-body">
-                <div class="result-summary" id="resultSummary"></div>
-                <div class="sections-grid" id="sectionsGrid"></div>
-                
-                <div class="followup-section">
-                    <span class="option-label">Need clarification?</span>
-                    <input type="text" class="followup-input" id="followupInput" placeholder="Ask a follow-up question...">
-                    <button class="btn-launch" id="followupBtn" onclick="askFollowup()" style="padding:12px;">Ask Swarm</button>
-                    <div class="qa-list" id="qaList"></div>
-                </div>
-            </div>
-        </div>
+  <div class="input-area">
+    <div class="limit-banner" id="limitBanner" style="display:none"></div>
+    <div class="input-wrapper">
+      <textarea class="chat-input" id="chatInput" placeholder="Message Winy AI..." rows="1"></textarea>
+      <button class="send-btn" id="sendBtn" onclick="sendMessage()" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+      </button>
     </div>
+  </div>
+</main>
 
-    <!-- Login Modal -->
-    <div class="modal-backdrop" id="loginModal">
-        <div class="modal-box">
-            <h2>Welcome</h2>
-            <p>Login to deploy the swarm</p>
-            <div class="tabs">
-                <button class="tab active" onclick="switchTab('login')">Login</button>
-                <button class="tab" onclick="switchTab('signup')">Sign Up</button>
-            </div>
-            <div id="loginForm">
-                <input type="email" class="input-field" id="loginEmail" placeholder="Email">
-                <input type="password" class="input-field" id="loginPassword" placeholder="Password">
-                <button class="btn-full" onclick="loginWithEmail()">Login</button>
-            </div>
-            <div id="signupForm" style="display:none;">
-                <input type="email" class="input-field" id="signupEmail" placeholder="Email">
-                <input type="password" class="input-field" id="signupPassword" placeholder="Password (min 6 chars)">
-                <button class="btn-full" onclick="signupWithEmail()">Sign Up</button>
-            </div>
-            <div class="divider">or</div>
-            <button class="google-btn" onclick="loginWithGoogle()">Continue with Google</button>
-        </div>
+<!-- Login Modal -->
+<div class="modal-overlay" id="loginModal">
+  <div class="modal-card">
+    <h2>Welcome</h2>
+    <p class="sub">Sign in to start chatting</p>
+    <div id="loginForm">
+      <input type="email" class="m-input" id="loginEmail" placeholder="Email address">
+      <input type="password" class="m-input" id="loginPass" placeholder="Password">
+      <button class="m-btn m-btn-primary" onclick="emailLogin()">Sign In</button>
     </div>
-
-    <!-- Alert Modal -->
-    <div class="modal-backdrop" id="alertModal">
-        <div class="modal-box">
-            <h2 id="alertTitle">Title</h2>
-            <p id="alertMessage" style="margin:20px 0;color:#666;">Message</p>
-            <button class="btn-full" onclick="closeAlert()">OK</button>
-        </div>
+    <div id="signupForm" style="display:none">
+      <input type="email" class="m-input" id="signupEmail" placeholder="Email address">
+      <input type="password" class="m-input" id="signupPass" placeholder="Create password (6+ chars)">
+      <button class="m-btn m-btn-primary" onclick="emailSignup()">Create Account</button>
     </div>
+    <div class="m-divider">or</div>
+    <button class="m-btn m-btn-secondary" onclick="googleLogin()">Continue with Google</button>
+    <p style="text-align:center;margin-top:16px;font-size:12px;color:var(--text-secondary);cursor:pointer" id="authToggle" onclick="toggleAuthMode()">Don't have an account? Sign up</p>
+  </div>
+</div>
 
-    <script>
-        const firebaseConfig = { apiKey: "AIzaSyBUmnO-o2UaVKuaPqHBdLwm03dcfpOWzDU", authDomain: "winy-3984d.firebaseapp.com", projectId: "winy-3984d", storageBucket: "winy-3984d.firebasestorage.app", messagingSenderId: "126237613814", appId: "1:126237613814:web:e3cb88222d920545a416d7" };
-        firebase.initializeApp(firebaseConfig);
-        const auth = firebase.auth();
-        
-        var isPro = {{ session.get('is_pro', False) | tojson }};
-        var queriesUsed = {{ session.get('queries_count', 0) | tojson }};
-        var followupsUsed = {{ session.get('followups_count', 0) | tojson }};
-        var rzpKeyId = {{ razorpay_key_id | tojson }};
-        var isLoggedIn = false, currentUser = null, currentMode = 'problem', currentContext = '';
+<script>
+// Firebase
+const fb={apiKey:"AIzaSyBUmnO-o2UaVKuaPqHBdLwm03dcfpOWzDU",authDomain:"winy-3984d.firebaseapp.com",projectId:"winy-3984d",storageBucket:"winy-3984d.firebasestorage.app",messagingSenderId:"126237613814",appId:"1:126237613814:web:e3cb88222d920545a416d7"};
+firebase.initializeApp(fb);const auth=firebase.auth();
 
-        auth.onAuthStateChanged(function(user) {
-            if (user) { isLoggedIn = true; currentUser = user; enableFeatures(); updateUserUI(); } 
-            else { isLoggedIn = false; currentUser = null; disableFeatures(); updateUserUI(); }
-        });
+// State
+let currentUser=null,isPro=false,msgCount=0,currentConvId=null,isStreaming=false,isLoginMode=true;
+const rzpKey={{ razorpay_key_id | tojson }};
 
-        function setMode(mode) {
-            currentMode = mode;
-            document.querySelectorAll('.mode-tab').forEach(t => t.classList.remove('active'));
-            document.getElementById('tab' + mode.charAt(0).toUpperCase() + mode.slice(1)).classList.add('active');
-            
-            var placeholders = {
-                'problem': 'Describe your problem or question in detail...',
-                'business': 'Describe your business idea or challenge...',
-                'learning': 'What topic do you want to learn or understand better?'
-            };
-            document.getElementById('mainPrompt').placeholder = placeholders[mode];
-        }
+// Auth
+auth.onAuthStateChanged(u=>{
+  currentUser=u;
+  if(u){loadUserState();updateSidebar()}
+  else{resetUI()}
+});
 
-        function enableFeatures() {
-            ['mainPrompt', 'optCategory', 'optDepth'].forEach(id => document.getElementById(id).disabled = false);
-            document.getElementById('btnLaunch').disabled = false;
-            document.getElementById('btnLaunch').innerHTML = 'Deploy Swarm';
-            document.getElementById('youtubeSection').style.display = 'block';
-        }
-        function disableFeatures() {
-            ['mainPrompt', 'optCategory', 'optDepth'].forEach(id => document.getElementById(id).disabled = true);
-            document.getElementById('btnLaunch').disabled = true;
-            document.getElementById('btnLaunch').innerHTML = 'Login to Deploy Swarm';
-            document.getElementById('youtubeSection').style.display = 'none';
-        }
-        function updateUserUI() {
-            var navLogo = document.getElementById('navLogo'), navButtons = document.getElementById('navButtons'), footer = document.getElementById('footerStats'), mainNav = document.getElementById('mainNav');
-            if (isLoggedIn) {
-                var initial = currentUser.email.charAt(0).toUpperCase();
-                navLogo.innerHTML = '<div class="user-avatar">' + initial + '</div>';
-                navButtons.innerHTML = '<button class="btn btn-secondary" onclick="logout()">Logout</button>' + (isPro ? '<span class="pro-badge">PRO</span>' : '<button class="btn btn-primary" onclick="initiatePayment()">Upgrade</button>');
-                if (isPro) { mainNav.classList.add('pro-nav'); footer.innerHTML = '<strong>Pro User:</strong> Unlimited queries'; } 
-                else { mainNav.classList.remove('pro-nav'); footer.innerHTML = '<strong>Free:</strong> ' + Math.max(0, 3-queriesUsed) + ' queries left today'; }
-            } else {
-                mainNav.classList.remove('pro-nav');
-                navLogo.textContent = 'Winy AI';
-                navButtons.innerHTML = '<button class="btn btn-secondary" onclick="showLoginModal()">Login</button>';
-                footer.innerHTML = 'Please login to access features';
+function loadUserState(){
+  fetch('/api/user-state').then(r=>r.json()).then(d=>{
+    isPro=d.is_pro;msgCount=d.msg_count||0;
+    updateLimitBanner();loadHistory();
+  }).catch(()=>{});
+}
+
+function updateSidebar(){
+  const f=document.getElementById('sidebarFooter');
+  if(!currentUser)return;
+  const init=currentUser.email[0].toUpperCase();
+  f.innerHTML=`<div class="user-row"><div class="avatar">${init}</div><div class="user-name">${currentUser.email}</div>${isPro?'<span class="pro-pill">PRO</span>':''}<button class="logout-btn" onclick="logout()">Logout</button></div>`;
+}
+
+function resetUI(){
+  document.getElementById('sidebarFooter').innerHTML='<button class="m-btn m-btn-secondary" onclick="showLogin()" style="margin:0;font-size:13px">Login to continue</button>';
+  document.getElementById('historyList').innerHTML='';
+  newChat();
+}
+
+function showLogin(){document.getElementById('loginModal').classList.add('active')}
+function hideLogin(){document.getElementById('loginModal').classList.remove('active')}
+function toggleAuthMode(){
+  isLoginMode=!isLoginMode;
+  document.getElementById('loginForm').style.display=isLoginMode?'block':'none';
+  document.getElementById('signupForm').style.display=isLoginMode?'none':'block';
+  document.getElementById('authToggle').textContent=isLoginMode?"Don't have an account? Sign up":"Already have an account? Sign in";
+}
+function emailLogin(){
+  const e=document.getElementById('loginEmail').value,p=document.getElementById('loginPass').value;
+  if(!e||!p)return alert('Fill all fields');
+  auth.signInWithEmailAndPassword(e,p).then(()=>hideLogin()).catch(err=>alert(err.message));
+}
+function emailSignup(){
+  const e=document.getElementById('signupEmail').value,p=document.getElementById('signupPass').value;
+  if(!e||!p)return alert('Fill all fields');
+  if(p.length<6)return alert('Password min 6 characters');
+  auth.createUserWithEmailAndPassword(e,p).then(()=>hideLogin()).catch(err=>alert(err.message));
+}
+function googleLogin(){
+  auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()).then(()=>hideLogin()).catch(err=>alert(err.message));
+}
+function logout(){auth.signOut();isPro=false;msgCount=0}
+
+// Chat
+function newChat(){
+  currentConvId=null;
+  document.getElementById('messagesContainer').innerHTML=document.getElementById('emptyState')?.outerHTML||'';
+  document.getElementById('chatTitle').textContent='New Conversation';
+  document.querySelectorAll('.history-item').forEach(i=>i.classList.remove('active'));
+}
+
+function useSuggestion(el){
+  document.getElementById('chatInput').value=el.textContent;
+  autoResize();updateSendBtn();
+  sendMessage();
+}
+
+function loadHistory(){
+  fetch('/api/conversations').then(r=>r.json()).then(data=>{
+    const list=document.getElementById('historyList');
+    list.innerHTML='';
+    (data.conversations||[]).forEach(c=>{
+      const div=document.createElement('div');
+      div.className='history-item'+(c.id===currentConvId?' active':'');
+      div.textContent=c.title||'Untitled';
+      div.onclick=()=>loadConversation(c.id);
+      list.appendChild(div);
+    });
+  }).catch(()=>{});
+}
+
+function loadConversation(id){
+  currentConvId=id;
+  fetch('/api/conversations/'+id+'/messages').then(r=>r.json()).then(data=>{
+    const container=document.getElementById('messagesContainer');
+    container.innerHTML='';
+    (data.messages||[]).forEach(m=>appendMessage(m.role,m.content,false));
+    scrollToBottom();
+    document.querySelectorAll('.history-item').forEach(i=>i.classList.remove('active'));
+    // highlight active
+  }).catch(()=>{});
+}
+
+function appendMessage(role,content,animate=true){
+  const container=document.getElementById('messagesContainer');
+  const empty=document.getElementById('emptyState');
+  if(empty)empty.remove();
+  
+  const div=document.createElement('div');
+  div.className=`message ${role}`;
+  if(!animate)div.style.animation='none';
+  
+  const avatarText=role==='ai'?'W':(currentUser?currentUser.email[0].toUpperCase():'U');
+  div.innerHTML=`<div class="msg-avatar">${avatarText}</div><div class="msg-content"><div class="msg-bubble">${renderMarkdown(content)}</div></div>`;
+  container.appendChild(div);
+  return div;
+}
+
+function renderMarkdown(text){
+  if(!text)return'';
+  let html=text
+    .replace(/```(\w*)\n([\s\S]*?)```/g,'<pre><code>$2</code></pre>')
+    .replace(/`([^`]+)`/g,'<code>$1</code>')
+    .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g,'<em>$1</em>')
+    .replace(/^### (.+)$/gm,'<h4 style="margin:12px 0 6px;font-size:15px">$1</h4>')
+    .replace(/^## (.+)$/gm,'<h3 style="margin:14px 0 8px;font-size:16px">$1</h3>')
+    .replace(/^# (.+)$/gm,'<h2 style="margin:16px 0 10px;font-size:18px">$1</h2>')
+    .replace(/^- (.+)$/gm,'<li>$1</li>')
+    .replace(/(<li>.*<\/li>)/gs,'<ul>$1</ul>')
+    .replace(/\n\n/g,'</p><p>')
+    .replace(/\n/g,'<br>');
+  return '<p>'+html+'</p>';
+}
+
+async function sendMessage(){
+  if(isStreaming)return;
+  const input=document.getElementById('chatInput');
+  const text=input.value.trim();
+  if(!text||!currentUser)return;
+  
+  if(!isPro&&msgCount>=10){
+    updateLimitBanner();return;
+  }
+  
+  input.value='';autoResize();updateSendBtn();
+  appendMessage('user',text);
+  scrollToBottom();
+  
+  // Create AI message placeholder
+  const aiDiv=document.createElement('div');
+  aiDiv.className='message ai';
+  aiDiv.innerHTML=`<div class="msg-avatar">W</div><div class="msg-content"><div class="msg-bubble"><span class="cursor"></span></div></div>`;
+  document.getElementById('messagesContainer').appendChild(aiDiv);
+  scrollToBottom();
+  
+  isStreaming=true;
+  document.getElementById('sendBtn').disabled=true;
+  
+  try{
+    const resp=await fetch('/api/chat',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:text,conversation_id:currentConvId})
+    });
+    
+    const reader=resp.body.getReader();
+    const decoder=new TextDecoder();
+    let fullContent='';
+    const bubble=aiDiv.querySelector('.msg-bubble');
+    
+    while(true){
+      const{done,value}=await reader.read();
+      if(done)break;
+      const chunk=decoder.decode(value,{stream:true});
+      const lines=chunk.split('\n');
+      for(const line of lines){
+        if(line.startsWith('data: ')){
+          const data=line.slice(6);
+          if(data==='[DONE]'){
+            bubble.innerHTML=renderMarkdown(fullContent);
+            isStreaming=false;
+            msgCount++;
+            updateLimitBanner();
+            updateSendBtn();
+            if(!currentConvId)loadHistory();
+            return;
+          }
+          try{
+            const parsed=JSON.parse(data);
+            if(parsed.token){
+              fullContent+=parsed.token;
+              bubble.innerHTML=renderMarkdown(fullContent)+'<span class="cursor"></span>';
+              scrollToBottom();
+            }else if(parsed.conv_id){
+              currentConvId=parsed.conv_id;
+              document.getElementById('chatTitle').textContent=text.slice(0,40)+(text.length>40?'...':'');
+            }else if(parsed.error){
+              bubble.innerHTML='<span style="color:#c00">'+parsed.error+'</span>';
+              isStreaming=false;updateSendBtn();return;
             }
+          }catch(e){}
         }
+      }
+    }
+  }catch(err){
+    aiDiv.querySelector('.msg-bubble').innerHTML='<span style="color:#c00">Connection error. Try again.</span>';
+  }
+  isStreaming=false;updateSendBtn();
+}
 
-        function showLoginModal() { document.getElementById('loginModal').classList.add('active'); }
-        function hideLoginModal() { document.getElementById('loginModal').classList.remove('active'); }
-        function switchTab(tab) {
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            if (tab === 'login') { document.querySelector('.tab:first-child').classList.add('active'); document.getElementById('loginForm').style.display = 'block'; document.getElementById('signupForm').style.display = 'none'; } 
-            else { document.querySelector('.tab:last-child').classList.add('active'); document.getElementById('loginForm').style.display = 'none'; document.getElementById('signupForm').style.display = 'block'; }
-        }
-        function loginWithEmail() { var e = document.getElementById('loginEmail').value, p = document.getElementById('loginPassword').value; if (!e || !p) return showAlert('Error', 'Enter email and password'); auth.signInWithEmailAndPassword(e, p).then(hideLoginModal).catch(err => showAlert('Error', err.message)); }
-        function signupWithEmail() { var e = document.getElementById('signupEmail').value, p = document.getElementById('signupPassword').value; if (!e || !p) return showAlert('Error', 'Enter email and password'); auth.createUserWithEmailAndPassword(e, p).then(hideLoginModal).catch(err => showAlert('Error', err.message)); }
-        function loginWithGoogle() { auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()).then(hideLoginModal).catch(err => showAlert('Error', err.message)); }
-        function logout() { auth.signOut().then(() => { isPro = false; queriesUsed = 0; followupsUsed = 0; updateUserUI(); }); }
-        function showAlert(t, m) { document.getElementById('alertTitle').textContent = t; document.getElementById('alertMessage').textContent = m; document.getElementById('alertModal').classList.add('active'); }
-        function closeAlert() { document.getElementById('alertModal').classList.remove('active'); }
-        
-        function highlightText(text) {
-            if (!text) return '';
-            var colors = {'key': 'hl-key', 'solution': 'hl-solution', 'step': 'hl-step', 'important': 'hl-key'};
-            var html = text;
-            for (var w in colors) { html = html.replace(new RegExp('\\\\b' + w + '\\\\b', 'gi'), '<span class="hl ' + colors[w] + '">' + w + '</span>'); }
-            return html;
-        }
-        
-        function renderResults(data) {
-            document.getElementById('resultSummary').innerHTML = '<p>' + highlightText(data.summary) + '</p>';
-            var sections = data.sections || [];
-            var html = '';
-            sections.forEach(s => { html += '<div class="section-card"><h3>' + s.title + '</h3><p>' + highlightText(s.content) + '</p></div>'; });
-            document.getElementById('sectionsGrid').innerHTML = html;
-        }
+function updateLimitBanner(){
+  const banner=document.getElementById('limitBanner');
+  if(!currentUser){banner.style.display='none';return}
+  if(isPro){banner.style.display='none';return}
+  const remaining=Math.max(0,10-msgCount);
+  if(remaining<=3){
+    banner.style.display='block';
+    banner.innerHTML=remaining>0?`${remaining} messages left today. <span onclick="upgrade()">Upgrade to Pro</span>`:`Daily limit reached. <span onclick="upgrade()">Upgrade to Pro</span> for unlimited.`;
+  }else{banner.style.display='none'}
+}
 
-        function runSwarm() {
-            if (!isLoggedIn) { showLoginModal(); return; }
-            var prompt = document.getElementById('mainPrompt').value.trim();
-            if (!prompt) return showAlert('Error', 'Describe your problem');
-            var depth = document.getElementById('optDepth').value;
-            var category = document.getElementById('optCategory').value;
-            
-            if (depth === 'comprehensive' && !isPro) return showAlert('Pro Feature', 'Comprehensive guides are Pro only');
-            if (!isPro && queriesUsed >= 3) return showAlert('Limit', '3 queries used. Resets at midnight');
-            
-            currentContext = prompt;
-            document.getElementById('inputWrapper').style.display = 'none';
-            document.getElementById('loader').classList.add('active');
-            document.getElementById('qaList').innerHTML = '';
-            
-            fetch('/solve', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({prompt: prompt, mode: currentMode, category: category, depth: depth}) })
-            .then(res => res.json())
-            .then(data => {
-                document.getElementById('loader').classList.remove('active');
-                if (data.error) return showAlert('Error', data.error);
-                renderResults(data);
-                document.getElementById('resultsOverlay').classList.add('active');
-                if (!isPro) { queriesUsed++; updateUserUI(); }
-            })
-            .catch(err => { document.getElementById('loader').classList.remove('active'); document.getElementById('inputWrapper').style.display = 'block'; showAlert('Error', 'Failed: ' + err.message); });
-        }
+function upgrade(){
+  if(!rzpKey)return alert('Payment not configured');
+  fetch('/api/create-order',{method:'POST'}).then(r=>r.json()).then(order=>{
+    const rzp=new Razorpay({key:rzpKey,amount:order.amount,currency:order.currency,name:'Winy AI',description:'Pro - Unlimited Chat',order_id:order.order_id,
+      handler:function(response){
+        fetch('/api/verify-payment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(response)})
+        .then(r=>r.json()).then(d=>{
+          if(d.status==='success'){isPro=true;msgCount=0;updateLimitBanner();updateSidebar();alert('Welcome to Pro!')}
+          else alert('Verification failed');
+        });
+      },theme:{color:'#000000'}});
+    rzp.open();
+  }).catch(()=>alert('Payment error'));
+}
 
-        function askFollowup() {
-            if (!isLoggedIn) { showLoginModal(); return; }
-            var q = document.getElementById('followupInput').value.trim();
-            if (!q) return;
-            if (!isPro && followupsUsed >= 1) return showAlert('Limit', '1 follow-up per day for free users');
-            
-            var btn = document.getElementById('followupBtn');
-            btn.innerHTML = 'Thinking...'; btn.disabled = true;
-            document.getElementById('qaList').innerHTML += '<div class="qa-item"><div class="qa-question">Q: ' + q + '</div><div class="qa-answer" id="tempAnswer">Thinking...</div></div>';
-            
-            fetch('/followup', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({question: q, context: currentContext, mode: currentMode}) })
-            .then(res => res.json())
-            .then(data => { document.getElementById('tempAnswer').innerHTML = highlightText(data.answer); document.getElementById('tempAnswer').id = ''; document.getElementById('followupInput').value = ''; btn.innerHTML = 'Ask Swarm'; btn.disabled = false; if (!isPro) followupsUsed++; })
-            .catch(() => { document.getElementById('tempAnswer').innerHTML = 'Error'; btn.innerHTML = 'Ask Swarm'; btn.disabled = false; });
-        }
+// Input handling
+const chatInput=document.getElementById('chatInput');
+chatInput.addEventListener('input',()=>{autoResize();updateSendBtn()});
+chatInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage()}});
+function autoResize(){chatInput.style.height='auto';chatInput.style.height=Math.min(chatInput.scrollHeight,200)+'px'}
+function updateSendBtn(){document.getElementById('sendBtn').disabled=!chatInput.value.trim()||isStreaming}
+function scrollToBottom(){const c=document.getElementById('messagesContainer');c.scrollTop=c.scrollHeight}
 
-        function analyzeYouTube() {
-            if (!isLoggedIn) { showLoginModal(); return; }
-            if (!isPro) return showAlert('Pro Feature', 'YouTube analysis is Pro only');
-            var url = document.getElementById('youtubeUrl').value.trim();
-            if (!url) return showAlert('Error', 'Enter YouTube URL');
-            
-            var resultDiv = document.getElementById('youtubeResult');
-            resultDiv.classList.add('active');
-            resultDiv.innerHTML = '<p style="color:#666;">Analyzing video...</p>';
-            
-            fetch('/analyze-youtube', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({url: url}) })
-            .then(res => res.json())
-            .then(data => {
-                if (data.error) resultDiv.innerHTML = '<p style="color:red;">Error: ' + data.error + '</p>';
-                else resultDiv.innerHTML = '<h4>Key Insights</h4><p>' + highlightText(data.analysis) + '</p>';
-            })
-            .catch(err => { resultDiv.innerHTML = '<p style="color:red;">Error: ' + err.message + '</p>'; });
-        }
+// Sidebar toggle (mobile)
+function toggleSidebar(){
+  const sb=document.getElementById('sidebar');
+  sb.classList.toggle('open');
+}
 
-        function initiatePayment() {
-            if (!isLoggedIn) { showLoginModal(); return; }
-            if (!rzpKeyId) return showAlert('Error', 'Payment not configured');
-            fetch('/api/create-order', {method: 'POST'}).then(r => r.json()).then(order => {
-                var options = { key: rzpKeyId, amount: order.amount, currency: order.currency, name: 'Winy AI', order_id: order.order_id,
-                    handler: function(response) {
-                        fetch('/api/verify-payment', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(response) })
-                        .then(r => r.json()).then(data => {
-                            if (data.status === 'success') { isPro = true; queriesUsed = 0; followupsUsed = 0; updateUserUI(); showAlert('Welcome to Pro!', 'Unlimited access activated'); } 
-                            else { showAlert('Failed', 'Verification failed'); }
-                        });
-                    }, theme: {color: '#000000'} };
-                new Razorpay(options).open();
-            }).catch(() => showAlert('Error', 'Payment failed'));
-        }
+// Close sidebar on outside click (mobile)
+document.getElementById('chatArea').addEventListener('click',()=>{
+  if(window.innerWidth<=768)document.getElementById('sidebar').classList.remove('open');
+});
 
-        function closeResultsOverlay() { document.getElementById('resultsOverlay').classList.remove('active'); document.getElementById('inputWrapper').style.display = 'block'; }
-        updateUserUI();
-    </script>
+// Init
+newChat();
+</script>
 </body>
 </html>
 '''
 
-# ==============================================================================
+# ============================================================================
 # ROUTES
-# ==============================================================================
-
+# ============================================================================
 @app.route('/')
 def home():
-    today = get_today()
-    if 'is_pro' not in session: session['is_pro'] = False
-    if 'queries_count' not in session: session['queries_count'] = 0
-    if 'followups_count' not in session: session['followups_count'] = 0
     return render_template_string(HTML_TEMPLATE, razorpay_key_id=RAZORPAY_KEY_ID)
 
-@app.route('/solve', methods=['POST'])
+@app.route('/api/user-state')
 @require_auth
-def solve():
-    """Solve any problem using AI swarm."""
-    client_ip = get_client_ip()
-    firebase_uid = session['firebase_uid']
-    today = get_today()
+def user_state():
+    uid = session['firebase_uid']
+    today = date.today().isoformat()
+    conn = get_db()
+    user = conn.execute("SELECT is_pro FROM users WHERE firebase_uid=?", (uid,)).fetchone()
+    usage = conn.execute("SELECT message_count FROM daily_usage WHERE firebase_uid=? AND usage_date=?", (uid, today)).fetchone()
+    conn.close()
+    return jsonify({
+        "is_pro": bool(user['is_pro']) if user else False,
+        "msg_count": usage['message_count'] if usage else 0
+    })
+
+@app.route('/api/conversations')
+@require_auth
+def get_conversations():
+    conn = get_db()
+    rows = conn.execute("SELECT id, title FROM conversations WHERE firebase_uid=? ORDER BY created_at DESC LIMIT 50", (session['firebase_uid'],)).fetchall()
+    conn.close()
+    return jsonify({"conversations": [dict(r) for r in rows]})
+
+@app.route('/api/conversations/<int:cid>/messages')
+@require_auth
+def get_messages(cid):
+    conn = get_db()
+    rows = conn.execute("SELECT role, content FROM messages WHERE conversation_id=? ORDER BY created_at ASC", (cid,)).fetchall()
+    conn.close()
+    return jsonify({"messages": [dict(r) for r in rows]})
+
+@app.route('/api/chat', methods=['POST'])
+@require_auth
+def chat():
+    uid = session['firebase_uid']
+    today = date.today().isoformat()
+    data = request.json
+    user_msg = data.get('message', '').strip()
+    conv_id = data.get('conversation_id')
+    
+    if not user_msg:
+        return jsonify({"error": "Empty message"}), 400
     
     # Check limits
-    if client_ip not in ip_usage_tracker:
-        ip_usage_tracker[client_ip] = {'count': 0, 'date': today}
-    if ip_usage_tracker[client_ip]['date'] != today:
-        ip_usage_tracker[client_ip] = {'count': 0, 'date': today}
-        
-    if not session.get('is_pro'):
-        if session.get('queries_count', 0) >= 3 or ip_usage_tracker[client_ip]['count'] >= 3:
-            return jsonify({"error": "Daily limit reached (3 queries). Resets at midnight."}), 403
+    conn = get_db()
+    user = conn.execute("SELECT is_pro FROM users WHERE firebase_uid=?", (uid,)).fetchone()
+    is_pro = bool(user['is_pro']) if user else False
     
-    data = request.json
-    prompt = data.get('prompt', '')
-    mode = data.get('mode', 'problem')
-    category = data.get('category', 'General')
-    depth = data.get('depth', 'detailed')
+    if not is_pro:
+        usage = conn.execute("SELECT message_count FROM daily_usage WHERE firebase_uid=? AND usage_date=?", (uid, today)).fetchone()
+        count = usage['message_count'] if usage else 0
+        if count >= 10:
+            conn.close()
+            return jsonify({"error": "Daily limit reached. Upgrade to Pro."}), 403
     
-    if not prompt or len(prompt) < 10:
-        return jsonify({"error": "Please provide more details (at least 10 characters)."}), 400
-        
-    if depth == 'comprehensive' and not session.get('is_pro'):
-        return jsonify({"error": "Comprehensive guides are Pro-only."}), 403
+    # Create or get conversation
+    if not conv_id:
+        title = user_msg[:50] + ('...' if len(user_msg) > 50 else '')
+        cur = conn.execute("INSERT INTO conversations (firebase_uid, title) VALUES (?, ?)", (uid, title))
+        conv_id = cur.lastrowid
     
-    # Dynamic prompts based on mode
-    if mode == 'problem':
-        system_prompt = f"""You are an expert problem-solver. Break down this problem systematically.
-        Problem: "{prompt}"
-        Category: {category}
-        
-        Return ONLY JSON with these keys:
-        {{
-          "summary": "Brief overview of the problem and approach",
-          "sections": [
-            {{"title": "Root Cause Analysis", "content": "Detailed analysis"}},
-            {{"title": "Key Challenges", "content": "Main obstacles"}},
-            {{"title": "Solution Steps", "content": "Step-by-step actionable solutions"}},
-            {{"title": "Resources Needed", "content": "Tools, time, skills required"}},
-            {{"title": "Expected Outcomes", "content": "What to expect"}}
-          ]
-        }}"""
-    elif mode == 'business':
-        system_prompt = f"""You are a business consultant.
-        Idea: "{prompt}"
-        Industry: {category}
-        
-        Return JSON:
-        {{
-          "summary": "Executive summary",
-          "sections": [
-            {{"title": "Market Opportunity", "content": "Market size and trends"}},
-            {{"title": "Business Model", "content": "How to make money"}},
-            {{"title": "Go-to-Market", "content": "Launch strategy"}},
-            {{"title": "Financial Projections", "content": "Costs and revenue"}},
-            {{"title": "Key Milestones", "content": "Timeline and goals"}}
-          ]
-        }}"""
-    else:  # learning
-        system_prompt = f"""You are an expert teacher. Explain this topic clearly.
-        Topic: "{prompt}"
-        Category: {category}
-        
-        Return JSON:
-        {{
-          "summary": "What this is about",
-          "sections": [
-            {{"title": "Core Concepts", "content": "Fundamental ideas"}},
-            {{"title": "How It Works", "content": "Mechanisms and processes"}},
-            {{"title": "Key Principles", "content": "Important rules/laws"}},
-            {{"title": "Practical Examples", "content": "Real-world applications"}},
-            {{"title": "Next Steps", "content": "How to learn more"}}
-          ]
-        }}"""
+    # Save user message
+    conn.execute("INSERT INTO messages (conversation_id, role, content) VALUES (?, 'user', ?)", (conv_id, user_msg))
     
-    try:
-        raw = call_groq_llm(system_prompt, prompt, temperature=0.7)
-        parsed = parse_json_response(raw)
+    # Get history (last 20 messages)
+    history = conn.execute("SELECT role, content FROM messages WHERE conversation_id=? ORDER BY created_at DESC LIMIT 20", (conv_id,)).fetchall()
+    conn.close()
+    
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    for m in reversed(history):
+        messages.append({"role": m['role'], "content": m['content']})
+    
+    def generate():
+        # Send conv_id first if new
+        if not data.get('conversation_id'):
+            yield f"data: {json.dumps({'conv_id': conv_id})}\n\n"
         
-        if not parsed:
-            return jsonify({"error": "AI formatting error. Try again."}), 500
-        
-        # Save to DB
-        conn = get_db_connection()
-        conn.execute('''INSERT INTO query_history (firebase_uid, query_type, query_text, result_json)
-                       VALUES (?, ?, ?, ?)''', (firebase_uid, mode, prompt, json.dumps(parsed)))
-        
-        if not session.get('is_pro'):
-            session['queries_count'] = session.get('queries_count', 0) + 1
-            ip_usage_tracker[client_ip]['count'] += 1
-            conn.execute('''INSERT INTO daily_usage (firebase_uid, ip_address, usage_date, queries_count, followups_count)
-                           VALUES (?, ?, ?, 1, 0)
-                           ON CONFLICT(firebase_uid, usage_date) 
-                           DO UPDATE SET queries_count = daily_usage.queries_count + 1''', 
-                        (firebase_uid, client_ip, today))
-        conn.commit()
-        conn.close()
-        
-        return jsonify(parsed)
-    except Exception as e:
-        logger.error(f"Solve error: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/followup', methods=['POST'])
-@require_auth
-def followup():
-    if 'firebase_uid' not in session:
-        return jsonify({"error": "Authentication required"}), 401
-        
-    if not session.get('is_pro'):
-        if session.get('followups_count', 0) >= 1:
-            return jsonify({"error": "Follow-up limit reached (1/day)"}), 403
+        full_response = ""
+        for chunk in stream_groq(messages):
+            if chunk.strip() == "data: [DONE]":
+                # Save AI response
+                conn2 = get_db()
+                conn2.execute("INSERT INTO messages (conversation_id, role, content) VALUES (?, 'ai', ?)", (conv_id, full_response))
+                # Increment usage
+                conn2.execute("""INSERT INTO daily_usage (firebase_uid, usage_date, message_count) VALUES (?, ?, 1)
+                    ON CONFLICT(firebase_uid, usage_date) DO UPDATE SET message_count = daily_usage.message_count + 1""", (uid, today))
+                conn2.commit(); conn2.close()
+                yield chunk
+                break
+            
+            try:
+                parsed = json.loads(chunk[6:].strip())
+                if 'token' in parsed:
+                    full_response += parsed['token']
+            except: pass
+            yield chunk
     
-    data = request.json
-    question = data.get('question', '')
-    context = data.get('context', '')
-    mode = data.get('mode', 'problem')
-    
-    system_prompt = f"Context: {mode} - {context}. Answer concisely: {question}"
-    answer = call_groq_llm(system_prompt, question, temperature=0.5)
-    
-    if not session.get('is_pro'):
-        session['followups_count'] = session.get('followups_count', 0) + 1
-    
-    return jsonify({"answer": answer})
-
-@app.route('/analyze-youtube', methods=['POST'])
-@require_auth
-def analyze_youtube():
-    if not session.get('is_pro'):
-        return jsonify({"error": "Pro feature"}), 403
-        
-    data = request.json
-    url = data.get('url', '')
-    
-    transcript, error = get_youtube_transcript(url)
-    if error:
-        return jsonify({"error": error}), 400
-    
-    analysis_prompt = f"Analyze this video transcript and extract key insights, main points, and actionable takeaways:\n{transcript[:15000]}"
-    analysis = call_groq_llm("You are an expert analyst. Summarize and extract insights.", analysis_prompt, temperature=0.5)
-    
-    return jsonify({"analysis": analysis, "transcript": transcript[:500] + "..."})
+    return Response(stream_with_context(generate()), mimetype='text/event-stream',
+                   headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 @app.route('/api/create-order', methods=['POST'])
 @require_auth
 def create_order():
     if not razorpay_client:
-        return jsonify({"error": "Payment not configured"}), 500
-    try:
-        order = razorpay_client.order.create({"amount": 49900, "currency": "INR", "receipt": f"rcpt_{uuid.uuid4().hex[:16]}", "payment_capture": 1})
-        return jsonify(order)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Not configured"}), 500
+    order = razorpay_client.order.create({"amount": 49900, "currency": "INR", "receipt": f"rcpt_{uuid.uuid4().hex[:12]}", "payment_capture": 1})
+    return jsonify(order)
 
 @app.route('/api/verify-payment', methods=['POST'])
 @require_auth
 def verify_payment():
     data = request.json
-    order_id = data.get('razorpay_order_id', '')
-    payment_id = data.get('razorpay_payment_id', '')
-    signature = data.get('razorpay_signature', '')
-    
-    if not all([order_id, payment_id, signature]):
+    oid, pid, sig = data.get('razorpay_order_id',''), data.get('razorpay_payment_id',''), data.get('razorpay_signature','')
+    if not all([oid, pid, sig]):
         return jsonify({"status": "failure"}), 400
-    
-    message = f"{order_id}|{payment_id}"
-    expected = hmac.new(RAZORPAY_KEY_SECRET.encode(), message.encode(), hashlib.sha256).hexdigest()
-    
-    if expected == signature:
-        firebase_uid = session['firebase_uid']
-        pro_expiry = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
-        
-        conn = get_db_connection()
-        conn.execute('''INSERT INTO users (firebase_uid, email, is_pro, pro_expiry)
-                       VALUES (?, ?, 1, ?)
-                       ON CONFLICT(firebase_uid) 
-                       DO UPDATE SET is_pro = 1, pro_expiry = ?''', 
-                    (firebase_uid, session.get('email', ''), pro_expiry, pro_expiry))
-        conn.commit()
-        conn.close()
-        
-        session['is_pro'] = True
-        session['queries_count'] = 0
-        session['followups_count'] = 0
-        
+    expected = hmac.new(RAZORPAY_KEY_SECRET.encode(), f"{oid}|{pid}".encode(), hashlib.sha256).hexdigest()
+    if expected == sig:
+        expiry = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
+        conn = get_db()
+        conn.execute("INSERT INTO users (firebase_uid, email, is_pro, pro_expiry) VALUES (?,?,1,?) ON CONFLICT(firebase_uid) DO UPDATE SET is_pro=1, pro_expiry=?",
+                     (session['firebase_uid'], '', expiry, expiry))
+        conn.commit(); conn.close()
         return jsonify({"status": "success"})
     return jsonify({"status": "failure"}), 400
 
 if __name__ == '__main__':
-    logger.info("Starting Winy AI...")
     app.run(host='0.0.0.0', port=5000, debug=False)
