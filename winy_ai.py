@@ -1,6 +1,6 @@
 """
-Winy AI - B&W Glass Chatbot v2
-Fixed streaming, Code model, Pro-locked Swarm, Like feedback, History
+Winy AI - B&W Glass Chatbot
+Streaming fixed, Code model, Pro-locked Swarm, Like feedback, History
 """
 import os, json, hmac, hashlib, sqlite3, logging, uuid, base64
 from datetime import datetime, date, timedelta
@@ -67,7 +67,7 @@ def require_auth(f):
     return decorated
 
 # ============================================================================
-# STREAMING ENGINE (FIXED FOR MULTI-TURN)
+# STREAMING ENGINE - FIXED FOR MULTI-TURN
 # ============================================================================
 SYSTEM_PROMPT = """You are Winy AI, a universal assistant helpful with any topic.
 Be direct, articulate, and use markdown when helpful. Never mention being an AI unless asked."""
@@ -76,7 +76,7 @@ SWARM_PROMPT = """You are Winy AI in SWARM MODE. Deploy multiple expert perspect
 Analyze: Root Cause, Strategic Options, Risks, Action Steps.
 Be thorough, structured, and exceptionally insightful. Use markdown headers and lists."""
 
-CODE_PROMPT = """You are Winy Code, an elite software engineer. 
+CODE_PROMPT = """You are Winy Code, an elite software engineer.
 Write clean, efficient, well-commented code. Always specify the language in code blocks.
 Explain complex logic simply. Suggest best practices and potential optimizations.
 If debugging, identify the root cause before providing the fix."""
@@ -88,35 +88,40 @@ def stream_groq(messages):
             json={"model": "llama-3.1-8b-instant", "messages": messages,
                   "stream": True, "max_tokens": 4096, "temperature": 0.7},
             stream=True, timeout=120)
-        
-        buffer = ""
-        for line in resp.iter_lines():
-            if not line: continue
-            decoded = line.decode('utf-8')
-            
-            # Handle multi-line data chunks properly
-            if decoded.startswith('data: '):
-                payload = decoded[6:]
-                if payload == '[DONE]':
-                    yield "data: [DONE]\n\n"
-                    return
-                
-                try:
-                    chunk = json.loads(payload)
-                    choices = chunk.get('choices', [])
-                    if choices and len(choices) > 0:
-                        delta = choices[0].get('delta', {})
-                        content = delta.get('content', '')
-                        if content:
-                            yield f"data: {json.dumps({'token': content})}\n\n"
-                except json.JSONDecodeError:
-                    # Skip malformed chunks instead of crashing
-                    logger.warning(f"Malformed chunk skipped: {payload[:100]}")
-                    continue
-                    
+
+        if resp.status_code != 200:
+            yield f"data: {json.dumps({'error': f'API returned {resp.status_code}'})}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line or not line.strip():
+                continue
+            line = line.strip()
+            if not line.startswith('data:'):
+                continue
+            payload = line[5:].strip()
+            if payload == '[DONE]':
+                yield "data: [DONE]\n\n"
+                return
+            try:
+                chunk = json.loads(payload)
+                choices = chunk.get('choices', [])
+                if choices and len(choices) > 0:
+                    delta = choices[0].get('delta', {})
+                    content = delta.get('content')
+                    if content is not None and len(content) > 0:
+                        yield f"data: {json.dumps({'token': content})}\n\n"
+            except json.JSONDecodeError:
+                continue
+
+    except http_requests.exceptions.Timeout:
+        yield f"data: {json.dumps({'error': 'Request timed out'})}\n\n"
     except Exception as e:
         logger.error(f"Stream error: {e}")
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
+    finally:
+        yield "data: [DONE]\n\n"
 
 # ============================================================================
 # HTML TEMPLATE
@@ -134,15 +139,12 @@ HTML_TEMPLATE = r'''
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#050505;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#e8e8e8;height:100vh;display:flex;overflow:hidden}
-
-/* ORBS */
 .orb{position:absolute;border-radius:50%;filter:blur(100px);pointer-events:none;z-index:0}
 .orb-1{width:400px;height:400px;background:radial-gradient(circle,rgba(255,255,255,0.07) 0%,transparent 70%);top:-150px;left:-100px;animation:drift1 12s ease-in-out infinite}
 .orb-2{width:300px;height:300px;background:radial-gradient(circle,rgba(255,255,255,0.05) 0%,transparent 70%);bottom:-80px;right:-80px;animation:drift2 15s ease-in-out infinite reverse}
 @keyframes drift1{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(40px,-30px) scale(1.08)}}
 @keyframes drift2{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(-30px,25px) scale(1.05)}}
 
-/* SIDEBAR */
 .sidebar{width:260px;background:rgba(255,255,255,0.03);backdrop-filter:blur(30px);border-right:1px solid rgba(255,255,255,0.06);display:flex;flex-direction:column;z-index:20;transition:transform 0.3s ease;flex-shrink:0}
 .sidebar-header{padding:20px;border-bottom:1px solid rgba(255,255,255,0.06)}
 .sidebar-logo{font-size:18px;font-weight:700;letter-spacing:-0.5px;color:#fff}
@@ -158,7 +160,6 @@ body{background:#050505;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
 .sidebar-btn{background:none;border:none;color:rgba(255,255,255,0.4);cursor:pointer;font-size:11px;padding:4px 8px;border-radius:6px}
 .sidebar-btn:hover{color:#fff;background:rgba(255,255,255,0.08)}
 
-/* MAIN */
 .chat-main{flex:1;display:flex;flex-direction:column;position:relative;z-index:10;min-width:0}
 .header{display:flex;align-items:center;justify-content:space-between;padding:16px 24px;border-bottom:1px solid rgba(255,255,255,0.04);flex-shrink:0;background:rgba(5,5,5,0.5);backdrop-filter:blur(20px)}
 .header-left{display:flex;align-items:center;gap:12px}
@@ -185,7 +186,6 @@ body{background:#050505;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
 .header-btn.pro-upgrade{background:#fff;color:#000;border-color:#fff}
 .header-btn.pro-upgrade:hover{opacity:0.9}
 
-/* MESSAGES */
 .messages{flex:1;overflow-y:auto;padding:24px;display:flex;flex-direction:column;gap:20px}
 .empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;gap:16px;opacity:0.4}
 .empty-icon{width:64px;height:64px;border:1px solid rgba(255,255,255,0.1);border-radius:16px;display:flex;align-items:center;justify-content:center}
@@ -217,7 +217,6 @@ body{background:#050505;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
 .msg-time.user{margin-right:4px}
 .msg-time.ai{margin-left:4px}
 
-/* LIKE BUTTON */
 .like-btn{background:none;border:none;cursor:pointer;padding:4px;border-radius:6px;transition:all 0.2s;display:flex;align-items:center;justify-content:center;opacity:0.3}
 .like-btn:hover{opacity:0.8;background:rgba(255,255,255,0.06)}
 .like-btn.liked{opacity:1;color:#fff}
@@ -226,7 +225,6 @@ body{background:#050505;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
 @keyframes likePop{0%{transform:scale(1)}50%{transform:scale(1.3)}100%{transform:scale(1)}}
 .like-btn.animate svg{animation:likePop 0.4s ease}
 
-/* TYPING */
 .typing-bubble{background:rgba(255,255,255,0.04);backdrop-filter:blur(24px);border:1px solid rgba(255,255,255,0.07);padding:16px 22px;border-radius:18px 18px 18px 4px;display:flex;align-items:center;gap:6px}
 .typing-bar{width:3px;height:14px;background:rgba(255,255,255,0.4);border-radius:2px;animation:typingWave 1.2s ease-in-out infinite}
 .typing-bar:nth-child(1){animation-delay:0s;height:10px}
@@ -238,7 +236,6 @@ body{background:#050505;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
 .cursor{display:inline-block;width:2px;height:15px;background:rgba(255,255,255,0.7);margin-left:2px;animation:blink 0.8s infinite;vertical-align:middle}
 @keyframes blink{0%,50%{opacity:1}51%,100%{opacity:0}}
 
-/* INPUT */
 .input-area{padding:14px 24px 22px;flex-shrink:0}
 .input-wrapper{display:flex;align-items:flex-end;gap:10px;background:rgba(255,255,255,0.03);backdrop-filter:blur(30px);border:1px solid rgba(255,255,255,0.06);border-radius:22px;padding:5px 5px 5px 18px;transition:all 0.3s}
 .input-wrapper:focus-within{border-color:rgba(255,255,255,0.15)}
@@ -252,7 +249,6 @@ body{background:#050505;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
 .limit-banner{text-align:center;padding:8px;font-size:11px;color:rgba(255,255,255,0.3)}
 .limit-banner span{color:#fff;font-weight:600;cursor:pointer;text-decoration:underline}
 
-/* LOGIN GATE */
 .login-gate{position:fixed;inset:0;background:#050505;z-index:500;display:flex;align-items:center;justify-content:center;padding:20px}
 .login-gate.hidden{display:none}
 .gate-card{background:rgba(255,255,255,0.03);backdrop-filter:blur(40px);border:1px solid rgba(255,255,255,0.08);border-radius:24px;padding:40px;max-width:400px;width:100%;text-align:center}
@@ -293,7 +289,6 @@ body{background:#050505;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
 <body>
 <div class="orb orb-1"></div><div class="orb orb-2"></div>
 
-<!-- LOGIN GATE -->
 <div class="login-gate" id="loginGate">
   <div class="gate-card">
     <h1>Winy AI</h1>
@@ -346,7 +341,7 @@ body{background:#050505;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
 
   <div class="messages" id="messages">
     <div class="empty-state" id="emptyState">
-      <div class="empty-icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></div>
+      <div class="empty-icon"><svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.3)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></div>
       <span>Ask anything to begin</span>
     </div>
   </div>
@@ -373,9 +368,7 @@ firebase.initializeApp(fb);const auth=firebase.auth();
 
 let currentUser=null,isPro=false,msgCount=0,convId=null,isStreaming=false,currentModel='winy11',isGateLogin=true;
 const rzpKey={{ razorpay_key_id | tojson }};
-
-// SVG Icons
-const THUMB_UP_SVG = '<svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>';
+const THUMB_UP_SVG='<svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>';
 
 auth.onAuthStateChanged(u=>{
   currentUser=u;
@@ -386,41 +379,33 @@ auth.onAuthStateChanged(u=>{
 async function syncSession(){
   try{const t=await currentUser.getIdToken();await fetch('/api/auth-sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:t,email:currentUser.email})})}catch(e){console.error(e)}
 }
-
 function loadState(){fetch('/api/user-state').then(r=>r.json()).then(d=>{isPro=d.is_pro;msgCount=d.msg_count||0;updateLimit();updateModelLock()}).catch(()=>{})}
-
 function updateUI(){
-  const hr=document.getElementById('headerRight');
-  const sf=document.getElementById('sidebarFooter');
+  const hr=document.getElementById('headerRight'),sf=document.getElementById('sidebarFooter');
   if(!currentUser){hr.innerHTML='<button class="header-btn" onclick="showLoginGate()">Login</button>';sf.innerHTML='';return}
   const init=currentUser.email[0].toUpperCase();
   if(isPro){
     hr.innerHTML='<span class="pro-pill">PRO</span><button class="header-btn" onclick="doLogout()">'+init+'</button>';
-    sf.innerHTML=`<div class="user-row"><span class="user-email">${currentUser.email}</span><span class="pro-pill">PRO</span><button class="sidebar-btn" onclick="doLogout()">Logout</button></div>`;
+    sf.innerHTML='<div class="user-row"><span class="user-email">'+currentUser.email+'</span><span class="pro-pill">PRO</span><button class="sidebar-btn" onclick="doLogout()">Logout</button></div>';
   }else{
     hr.innerHTML='<button class="header-btn pro-upgrade" onclick="upgrade()">Upgrade to Pro</button><button class="header-btn" onclick="doLogout()">'+init+'</button>';
-    sf.innerHTML=`<div class="user-row"><span class="user-email">${currentUser.email}</span><button class="sidebar-btn" onclick="upgrade()">Upgrade</button><button class="sidebar-btn" onclick="doLogout()">Logout</button></div>`;
+    sf.innerHTML='<div class="user-row"><span class="user-email">'+currentUser.email+'</span><button class="sidebar-btn" onclick="upgrade()">Upgrade</button><button class="sidebar-btn" onclick="doLogout()">Logout</button></div>';
   }
   updateModelLock();
 }
-
 function updateModelLock(){
-  const swarm=document.getElementById('swarmOption');
-  if(isPro){swarm.classList.remove('locked');swarm.onclick=function(){selectModel('swarm','Swarm Mode')}}
-  else{swarm.classList.add('locked');swarm.onclick=function(){showAlert('Pro Feature','Swarm Mode requires Pro. Upgrade to unlock deep multi-perspective analysis.')}}
+  const s=document.getElementById('swarmOption');
+  if(isPro){s.classList.remove('locked');s.onclick=function(){selectModel('swarm','Swarm Mode')}}
+  else{s.classList.add('locked');s.onclick=function(){showAlert('Pro Feature','Swarm Mode requires Pro. Upgrade to unlock.')}}
 }
-
 function resetUI(){document.getElementById('headerRight').innerHTML='<button class="header-btn" onclick="showLoginGate()">Login</button>';document.getElementById('sidebarFooter').innerHTML='';document.getElementById('historyList').innerHTML='';newChat()}
 function showLoginGate(){document.getElementById('loginGate').classList.remove('hidden')}
-
-// GATE
 function toggleGate(){isGateLogin=!isGateLogin;document.getElementById('gateLoginForm').style.display=isGateLogin?'block':'none';document.getElementById('gateSignupForm').style.display=isGateLogin?'none':'block';document.getElementById('gateToggle').textContent=isGateLogin?"Don't have an account? Sign up":"Already have an account? Sign in"}
 function gateLogin(){const e=document.getElementById('gLoginEmail').value,p=document.getElementById('gLoginPass').value;if(!e||!p)return showAlert('Error','Fill all fields');auth.signInWithEmailAndPassword(e,p).catch(err=>showAlert('Error',err.message))}
 function gateSignup(){const e=document.getElementById('gSignupEmail').value,p=document.getElementById('gSignupPass').value;if(!e||!p)return showAlert('Error','Fill all fields');if(p.length<6)return showAlert('Error','Min 6 chars');auth.createUserWithEmailAndPassword(e,p).catch(err=>showAlert('Error',err.message))}
 function gateGoogle(){auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()).catch(err=>showAlert('Error',err.message))}
 function doLogout(){auth.signOut();isPro=false;msgCount=0}
 
-// SIDEBAR
 function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sidebarOverlay').classList.toggle('active')}
 function loadHistory(){
   fetch('/api/conversations').then(r=>r.json()).then(d=>{
@@ -437,46 +422,36 @@ function loadConv(id){
   }).catch(()=>{})
 }
 
-// MODEL
 function toggleDropdown(){document.getElementById('modelDD').classList.toggle('active');document.getElementById('modelPill').classList.toggle('open')}
 function selectModel(m,n){
   if(m==='swarm'&&!isPro){showAlert('Pro Feature','Swarm Mode requires Pro.');return}
   currentModel=m;document.getElementById('modelName').textContent=n;
   document.querySelectorAll('.dd-item').forEach(i=>i.classList.remove('selected'));
-  document.querySelector(`[data-m="${m}"]`).classList.add('selected');toggleDropdown()
+  document.querySelector('[data-m="'+m+'"]').classList.add('selected');toggleDropdown()
 }
 document.addEventListener('click',e=>{if(!e.target.closest('.model-selector')){document.getElementById('modelDD').classList.remove('active');document.getElementById('modelPill').classList.remove('open')}});
 
-// CHAT
 function newChat(){convId=null;document.getElementById('messages').innerHTML='<div class="empty-state" id="emptyState"><div class="empty-icon"><svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.3)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></div><span>Ask anything to begin</span></div>'}
 function getTime(){return new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}
-
 function renderMD(t){
   if(!t)return'';let h=t.replace(/```(\w*)\n([\s\S]*?)```/g,'<pre><code>$2</code></pre>').replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/\*(.+?)\*/g,'<em>$1</em>').replace(/^#### (.+)$/gm,'<h4>$1</h4>').replace(/^### (.+)$/gm,'<h4>$1</h4>').replace(/^## (.+)$/gm,'<h3>$1</h3>').replace(/^- (.+)$/gm,'<li>$1</li>').replace(/(<li>.*<\/li>)/gs,'<ul>$1</ul>').replace(/\n\n/g,'</p><p>').replace(/\n/g,'<br>');return'<p>'+h+'</p>'
 }
 
-function appendMsg(role,content,animate=true,msgId=null){
+function appendMsg(role,content,animate,msgId){
   const c=document.getElementById('messages');const e=document.getElementById('emptyState');if(e)e.remove();
-  const d=document.createElement('div');d.className=`msg-row ${role}`;if(!animate)d.style.animation='none';
+  const d=document.createElement('div');d.className='msg-row '+role;if(!animate)d.style.animation='none';
   const shine=role==='ai'?'msg-shine ai':'msg-shine user';
-  const timeClass=role==='ai'?'msg-time ai':'msg-time user';
-  
-  let metaHtml='';
-  if(role==='ai'){
-    metaHtml=`<div class="msg-meta"><button class="like-btn" onclick="toggleLike(this,${msgId||0})" title="Like this response">${THUMB_UP_SVG}</button><span class="${timeClass}">${getTime()}</span></div>`;
-  }else{
-    metaHtml=`<div class="msg-meta"><span class="${timeClass}">${getTime()}</span></div>`;
-  }
-  
-  d.innerHTML=`<div class="msg-wrap"><div class="msg-bubble ${role}"><div class="${shine}"></div><div class="msg-text ${role}">${renderMD(content)}</div></div>${metaHtml}</div>`;
+  const tc=role==='ai'?'msg-time ai':'msg-time user';
+  let meta='';
+  if(role==='ai'){meta='<div class="msg-meta"><button class="like-btn" onclick="toggleLike(this,'+(msgId||0)+')" title="Like">'+THUMB_UP_SVG+'</button><span class="'+tc+'">'+getTime()+'</span></div>'}
+  else{meta='<div class="msg-meta"><span class="'+tc+'">'+getTime()+'</span></div>'}
+  d.innerHTML='<div class="msg-wrap"><div class="msg-bubble '+role+'"><div class="'+shine+'"></div><div class="msg-text '+role+'">'+renderMD(content)+'</div></div>'+meta+'</div>';
   c.appendChild(d);return d;
 }
 
 function toggleLike(btn,msgId){
-  btn.classList.toggle('liked');
-  btn.classList.add('animate');
-  setTimeout(()=>btn.classList.remove('animate'),400);
-  if(msgId){fetch('/api/like',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message_id:msgId,liked:btn.classList.contains('liked')})}).catch(()=>{})}
+  btn.classList.toggle('liked');btn.classList.add('animate');setTimeout(()=>btn.classList.remove('animate'),400);
+  if(msgId)fetch('/api/like',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message_id:msgId,liked:btn.classList.contains('liked')})}).catch(()=>{})
 }
 
 async function sendMessage(){
@@ -486,85 +461,78 @@ async function sendMessage(){
   const empty=document.getElementById('emptyState');if(empty)empty.remove();
 
   const uRow=document.createElement('div');uRow.className='msg-row user';
-  uRow.innerHTML=`<div class="msg-wrap"><div class="msg-bubble user"><div class="msg-shine user"></div><div class="msg-text user">${text.replace(/</g,'&lt;')}</div></div><div class="msg-meta"><span class="msg-time user">${getTime()}</span></div></div>`;
+  uRow.innerHTML='<div class="msg-wrap"><div class="msg-bubble user"><div class="msg-shine user"></div><div class="msg-text user">'+text.replace(/</g,'&lt;')+'</div></div><div class="msg-meta"><span class="msg-time user">'+getTime()+'</span></div></div>';
   document.getElementById('messages').appendChild(uRow);
   input.value='';autoResize();updateSendBtn();scrollToBottom();
 
   const tRow=document.createElement('div');tRow.className='msg-row';tRow.id='typingRow';
-  tRow.innerHTML=`<div class="msg-wrap"><div class="typing-bubble"><div class="typing-bar"></div><div class="typing-bar"></div><div class="typing-bar"></div><div class="typing-bar"></div><div class="typing-bar"></div></div></div>`;
+  tRow.innerHTML='<div class="msg-wrap"><div class="typing-bubble"><div class="typing-bar"></div><div class="typing-bar"></div><div class="typing-bar"></div><div class="typing-bar"></div><div class="typing-bar"></div></div></div>';
   document.getElementById('messages').appendChild(tRow);scrollToBottom();
   isStreaming=true;updateSendBtn();
-
   await new Promise(r=>setTimeout(r,500));
 
   try{
     const resp=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,conversation_id:convId,model:currentModel})});
-    
     if(!resp.ok){
-      const err=await resp.json().catch(()=>({error:'Unknown error'}));
+      let errMsg='Server error';try{errMsg=(await resp.json()).error}catch(e){}
       const tr=document.getElementById('typingRow');if(tr)tr.remove();
-      appendMsg('ai','⚠ '+err.error);isStreaming=false;updateSendBtn();return;
+      appendMsg('ai','⚠ '+errMsg);isStreaming=false;updateSendBtn();return;
     }
-    
-    const reader=resp.body.getReader();const dec=new TextDecoder();let full='';let aiRow=null;let lastMsgId=null;
+    if(!resp.body){
+      const tr=document.getElementById('typingRow');if(tr)tr.remove();
+      appendMsg('ai','⚠ Streaming not supported');isStreaming=false;updateSendBtn();return;
+    }
+
+    const reader=resp.body.getReader();const dec=new TextDecoder();
+    let full='',aiRow=null,buffer='',streamDone=false;
 
     while(true){
-      const{done,value}=await reader.read();if(done)break;
-      const chunk=dec.decode(value,{stream:true});
-      const lines=chunk.split('\n');
-      
+      let value;
+      try{const result=await reader.read();if(result.done){streamDone=true;break}value=result.value}catch(e){break}
+      buffer+=dec.decode(value,{stream:true});
+      const lines=buffer.split('\n');buffer=lines.pop()||'';
       for(const line of lines){
-        if(!line.startsWith('data: '))continue;
-        const data=line.slice(6).trim();
-        if(!data)continue;
-        
-        if(data==='[DONE]'){
-          if(aiRow){const b=aiRow.querySelector('.msg-text');b.innerHTML=renderMD(full)}
-          isStreaming=false;msgCount++;updateLimit();updateSendBtn();loadHistory();return;
-        }
-        
+        const trimmed=line.trim();if(!trimmed||!trimmed.startsWith('data:'))continue;
+        const payload=trimmed.slice(5).trim();if(!payload)continue;
+        if(payload==='[DONE]'){streamDone=true;break}
         try{
-          const p=JSON.parse(data);
+          const p=JSON.parse(payload);
           if(p.token){
             full+=p.token;
-            if(!aiRow){
-              const tr=document.getElementById('typingRow');if(tr)tr.remove();
-              aiRow=appendMsg('ai','',true);
-              aiRow.querySelector('.msg-text').innerHTML='<span class="cursor"></span>';
-            }
-            aiRow.querySelector('.msg-text').innerHTML=renderMD(full)+'<span class="cursor"></span>';
-            scrollToBottom();
+            if(!aiRow){const tr=document.getElementById('typingRow');if(tr)tr.remove();aiRow=appendMsg('ai','',true);aiRow.querySelector('.msg-text').innerHTML='<span class="cursor"></span>'}
+            aiRow.querySelector('.msg-text').innerHTML=renderMD(full)+'<span class="cursor"></span>';scrollToBottom();
           }else if(p.conv_id){convId=p.conv_id}
-          else if(p.msg_id){lastMsgId=p.msg_id}
-          else if(p.error){
-            const tr=document.getElementById('typingRow');if(tr)tr.remove();
-            appendMsg('ai','⚠ '+p.error);isStreaming=false;updateSendBtn();return;
-          }
-        }catch(e){/* skip malformed */}
+          else if(p.msg_id&&aiRow){const lb=aiRow.querySelector('.like-btn');if(lb)lb.setAttribute('onclick','toggleLike(this,'+p.msg_id+')')}
+          else if(p.error){const tr=document.getElementById('typingRow');if(tr)tr.remove();if(!aiRow)appendMsg('ai','⚠ '+p.error);else aiRow.querySelector('.msg-text').innerHTML='<span style="color:#f87171">⚠ '+p.error+'</span>';streamDone=true;break}
+        }catch(e){}
       }
+      if(streamDone)break;
     }
+    try{reader.releaseLock()}catch(e){}
+    if(aiRow&&full)aiRow.querySelector('.msg-text').innerHTML=renderMD(full);
+    else if(!aiRow&&full)appendMsg('ai',full);
+    else if(!aiRow&&!full){const tr=document.getElementById('typingRow');if(tr)tr.remove();appendMsg('ai','No response received. Please try again.')}
+    isStreaming=false;msgCount++;updateLimit();updateSendBtn();loadHistory();
   }catch(err){
+    console.error('Chat error:',err);
     const tr=document.getElementById('typingRow');if(tr)tr.remove();
     appendMsg('ai','Connection error. Please try again.');
+    isStreaming=false;updateSendBtn();
   }
-  isStreaming=false;updateSendBtn();
 }
 
-// INPUT
 const msgInput=document.getElementById('msgInput');
 msgInput.addEventListener('input',()=>{autoResize();updateSendBtn()});
 msgInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage()}});
 function autoResize(){msgInput.style.height='auto';msgInput.style.height=Math.min(msgInput.scrollHeight,120)+'px'}
 function updateSendBtn(){document.getElementById('sendBtn').disabled=!msgInput.value.trim()||isStreaming}
 function scrollToBottom(){const c=document.getElementById('messages');c.scrollTop=c.scrollHeight}
-
 function updateLimit(){
   const b=document.getElementById('limitBanner');if(!currentUser||isPro){b.style.display='none';return}
   const r=Math.max(0,10-msgCount);
-  if(r<=3){b.style.display='block';b.innerHTML=r>0?`${r} messages left today. <span onclick="upgrade()">Upgrade to Pro</span>`:`Limit reached. <span onclick="upgrade()">Upgrade to Pro</span> for unlimited.`}
+  if(r<=3){b.style.display='block';b.innerHTML=r>0?r+' messages left today. <span onclick="upgrade()">Upgrade to Pro</span>':'Limit reached. <span onclick="upgrade()">Upgrade to Pro</span> for unlimited.'}
   else b.style.display='none';
 }
-
 function upgrade(){
   if(!currentUser){showLoginGate();return}
   if(!rzpKey)return showAlert('Error','Payment not configured');
@@ -574,10 +542,8 @@ function upgrade(){
       theme:{color:'#ffffff'}}).open()
   }).catch(()=>showAlert('Error','Payment error'))
 }
-
 function showAlert(t,m){document.getElementById('alertTitle').textContent=t;document.getElementById('alertMsg').textContent=m;document.getElementById('alertModal').classList.add('active')}
 function closeAlert(){document.getElementById('alertModal').classList.remove('active')}
-
 newChat();
 </script>
 </body>
@@ -654,47 +620,64 @@ def chat():
     user_msg = data.get('message', '').strip()
     conv_id = data.get('conversation_id')
     model_mode = data.get('model', 'winy11')
-    
     if not user_msg: return jsonify({"error": "Empty message"}), 400
-    
     conn = get_db()
     user = conn.execute("SELECT is_pro FROM users WHERE firebase_uid=?", (uid,)).fetchone()
     is_pro = bool(user['is_pro']) if user else False
-    
-    # Lock Swarm behind Pro
     if model_mode == 'swarm' and not is_pro:
         conn.close()
         return jsonify({"error": "Swarm Mode requires Pro subscription."}), 403
-    
     if not is_pro:
         usage = conn.execute("SELECT message_count FROM daily_usage WHERE firebase_uid=? AND usage_date=?", (uid, today)).fetchone()
         if (usage['message_count'] if usage else 0) >= 10:
             conn.close()
             return jsonify({"error": "Daily limit reached. Upgrade to Pro."}), 403
-    
     if not conv_id:
         title = user_msg[:50] + ('...' if len(user_msg) > 50 else '')
         cur = conn.execute("INSERT INTO conversations (firebase_uid, title) VALUES (?, ?)", (uid, title))
         conv_id = cur.lastrowid
-    
     conn.execute("INSERT INTO messages (conversation_id, role, content) VALUES (?, 'user', ?)", (conv_id, user_msg))
     history = conn.execute("SELECT role, content FROM messages WHERE conversation_id=? ORDER BY created_at DESC LIMIT 20", (conv_id,)).fetchall()
     conn.close()
-    
     prompts = {'swarm': SWARM_PROMPT, 'code': CODE_PROMPT, 'winy11': SYSTEM_PROMPT}
     sys_prompt = prompts.get(model_mode, SYSTEM_PROMPT)
-    
     messages = [{"role": "system", "content": sys_prompt}]
     for m in reversed(history):
         messages.append({"role": m['role'], "content": m['content']})
-    
+
     def generate():
-        if not data.get('conversation_id'):
-            yield f"data: {json.dumps({'conv_id': conv_id})}\n\n"
-        
-        full_response = ""
-        for chunk in stream_groq(messages):
-            if chunk.strip() == "data: [DONE]":
+        try:
+            if not data.get('conversation_id'):
+                yield f"data: {json.dumps({'conv_id': conv_id})}\n\n"
+            full_response = ""
+            done_sent = False
+            for chunk in stream_groq(messages):
+                if not chunk: continue
+                chunk = chunk.strip()
+                if not chunk: continue
+                if chunk == "data: [DONE]" or chunk == "data: [DONE]\n\n":
+                    if not done_sent:
+                        c2 = get_db()
+                        cur = c2.execute("INSERT INTO messages (conversation_id, role, content) VALUES (?, 'ai', ?)", (conv_id, full_response))
+                        msg_id = cur.lastrowid
+                        c2.execute("""INSERT INTO daily_usage (firebase_uid, usage_date, message_count) VALUES (?, ?, 1)
+                            ON CONFLICT(firebase_uid, usage_date) DO UPDATE SET message_count = daily_usage.message_count + 1""", (uid, today))
+                        c2.commit(); c2.close()
+                        yield f"data: {json.dumps({'msg_id': msg_id})}\n\n"
+                        yield "data: [DONE]\n\n"
+                        done_sent = True
+                    break
+                if chunk.startswith("data: "):
+                    try:
+                        parsed = json.loads(chunk[6:])
+                        if 'token' in parsed:
+                            full_response += parsed['token']
+                            yield chunk + "\n"
+                        elif 'error' in parsed:
+                            yield chunk + "\n"
+                            break
+                    except json.JSONDecodeError: continue
+            if not done_sent:
                 c2 = get_db()
                 cur = c2.execute("INSERT INTO messages (conversation_id, role, content) VALUES (?, 'ai', ?)", (conv_id, full_response))
                 msg_id = cur.lastrowid
@@ -702,13 +685,12 @@ def chat():
                     ON CONFLICT(firebase_uid, usage_date) DO UPDATE SET message_count = daily_usage.message_count + 1""", (uid, today))
                 c2.commit(); c2.close()
                 yield f"data: {json.dumps({'msg_id': msg_id})}\n\n"
-                yield chunk; break
-            try:
-                parsed = json.loads(chunk[6:].strip())
-                if 'token' in parsed: full_response += parsed['token']
-            except: pass
-            yield chunk
-    
+                yield "data: [DONE]\n\n"
+        except Exception as e:
+            logger.error(f"Generate error: {e}")
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            yield "data: [DONE]\n\n"
+
     return Response(stream_with_context(generate()), mimetype='text/event-stream', headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 @app.route('/api/create-order', methods=['POST'])
