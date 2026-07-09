@@ -2,5 +2,4 @@ flask==3.0.0
 requests==2.31.0
 razorpay==1.4.1
 gunicorn==21.2.0
-youtube-transcript-api==0.6.1
 setuptools==69.0.0
